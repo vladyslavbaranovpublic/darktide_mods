@@ -17,8 +17,6 @@ local Matrix4x4 = rawget(_G, "Matrix4x4")
 local Unit = rawget(_G, "Unit")
 local World = rawget(_G, "World")
 local LineObject = rawget(_G, "LineObject")
-local Color = rawget(_G, "Color")
-local IS_WINDOWS = package and package.config and package.config:sub(1, 1) == "\\"
 
 local function try_load_module(path)
     local ok, result = pcall(function()
@@ -1259,7 +1257,8 @@ local function wrap_daemon_command(command)
         return command
     end
 
-    if IS_WINDOWS then
+    local is_windows = package and package.config and package.config:sub(1, 1) == "\\"
+    if is_windows then
         return string.format('cd /d "%s" && %s', exe_dir, command)
     end
 
@@ -1469,7 +1468,8 @@ local function draw_marker(state, position, rotation)
     local line_object, world = ensure_marker_line_object(state)
     if line_object and world and LineObject.add_sphere then
         LineObject.reset(line_object)
-        local sphere_color = Color and Color(255, 255, 200, 80) or nil
+    local Color = rawget(_G, "Color")
+    local sphere_color = Color and Color(255, 255, 200, 80) or nil
         LineObject.add_sphere(line_object, sphere_color, position, 0.3, 16, 12)
 
         if rotation and Vector3 and Vector3.normalize then
@@ -1479,6 +1479,7 @@ local function draw_marker(state, position, rotation)
             local tip = position + forward * 0.6
             local left_tip = tip - right * 0.15
             local right_tip = tip + right * 0.15
+            local Color = rawget(_G, "Color")
             local color = Color and Color(255, 255, 140, 40) or nil
             LineObject.add_line(line_object, color, position, tip)
             LineObject.add_line(line_object, color, tip, left_tip)
@@ -1626,6 +1627,43 @@ ensure_daemon_paths = function()
 
     return MINIAUDIO_DAEMON_EXE ~= nil and MINIAUDIO_DAEMON_CTL ~= nil
 end
+
+local function daemon_log_path()
+    if not ensure_daemon_paths() then
+        return nil
+    end
+
+    local base_dir = MINIAUDIO_DAEMON_EXE and directory_of(MINIAUDIO_DAEMON_EXE) or nil
+    if not base_dir or base_dir == "" then
+        base_dir = MINIAUDIO_DAEMON_CTL and directory_of(MINIAUDIO_DAEMON_CTL) or nil
+    end
+    if not base_dir or base_dir == "" then
+        return nil
+    end
+
+    return ensure_trailing_separator(base_dir) .. "miniaudio_dt_log.txt"
+end
+
+local function clear_daemon_log_file(reason)
+    local path = daemon_log_path()
+    if not path then
+        return false
+    end
+
+    local ok = direct_write_file(path, "")
+    if ok then
+        if debug_enabled() then
+            mod:echo("[MiniAudioAddon] Cleared daemon log (%s).", tostring(reason or "unknown"))
+        end
+        return true
+    end
+
+    if debug_enabled() then
+        mod:echo("[MiniAudioAddon] Failed to clear daemon log (%s).", tostring(reason or "unknown"))
+    end
+    return false
+end
+
 local function daemon_write_control(volume_linear, pan, stop_flag, opts)
     if not USE_MINIAUDIO_DAEMON then
         return false
@@ -3337,6 +3375,17 @@ mod.on_disabled = function()
     end
     staged_payload_cleanups = {}
     purge_payload_files()
+    clear_daemon_log_file("mod_disabled")
+end
+
+mod.on_unload = function()
+    clear_daemon_log_file("mod_unload")
+end
+
+mod.on_game_state_changed = function(status, state_name)
+    if status == "enter" and state_name == "StateGameplay" then
+        clear_daemon_log_file("enter_gameplay")
+    end
 end
 
 mod.update = function(dt)
