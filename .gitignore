@@ -1,0 +1,16 @@
+# Logs
+*.log
+miniaudio_dt_log.txt
+
+# Windows junk
+Thumbs.db
+Desktop.ini
+
+# Build artifacts / binaries
+*.pdb
+*.dll
+*.obj
+*.lib
+
+# If you keep test payloads locally
+*.json.tmp
