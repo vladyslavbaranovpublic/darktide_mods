@@ -42,4 +42,16 @@ return {
     miniaudioaddon_rolloff_log = { en = "Logarithmic" },
     miniaudioaddon_rolloff_exp = { en = "Exponential" },
     miniaudioaddon_rolloff_none = { en = "None" },
+    miniaudioaddon_clear_logs = {
+        en = "Reset daemon log automatically",
+    },
+    miniaudioaddon_clear_logs_desc = {
+        en = "When enabled the miniaudio_dt_log.txt file is cleared on load/gameplay enter. Disable to preserve the full log across sessions.",
+    },
+    miniaudioaddon_api_log = {
+        en = "Enable API file logging",
+    },
+    miniaudioaddon_api_log_desc = {
+        en = "Write every MiniAudio API call and echo message to miniaudio_api_log.txt for troubleshooting. Disable to avoid large log files.",
+    },
 }

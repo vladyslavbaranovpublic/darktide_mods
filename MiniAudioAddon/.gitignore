@@ -1,6 +1,5 @@
 # Logs
 *.log
-*api_log.txt
 miniaudio_dt_log.txt
 
 # Windows junk

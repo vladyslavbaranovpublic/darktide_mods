@@ -1,5 +1,6 @@
 local mod = get_mod("MiniAudioAddon")
 local DLS = get_mod("DarktideLocalServer")
+local Mods = rawget(_G, "Mods")
 
 local cjson = rawget(_G, "cjson")
 if not cjson then
@@ -17,6 +18,8 @@ local Matrix4x4 = rawget(_G, "Matrix4x4")
 local Unit = rawget(_G, "Unit")
 local World = rawget(_G, "World")
 local LineObject = rawget(_G, "LineObject")
+
+local unpack_args = table.unpack or unpack
 
 local function try_load_module(path)
     local ok, result = pcall(function()
@@ -38,6 +41,26 @@ local Utils = try_load_module("MiniAudioAddon/scripts/mods/MiniAudioAddon/core/u
 if not Utils then
     mod:error("[MiniAudioAddon] Falling back to inline helpers; utility module unavailable.")
     Utils = {}
+end
+
+do
+    local module = try_load_module("MiniAudioAddon/scripts/mods/MiniAudioAddon/core/pose_tracker")
+    if not module then
+        module = try_load_module("scripts/mods/MiniAudioAddon/core/pose_tracker")
+    end
+    if module then
+        mod.pose_tracker = module
+    end
+end
+
+do
+    local module = try_load_module("MiniAudioAddon/scripts/mods/MiniAudioAddon/core/daemon_bridge")
+    if not module then
+        module = try_load_module("scripts/mods/MiniAudioAddon/core/daemon_bridge")
+    end
+    if module then
+        mod.daemon_bridge = module
+    end
 end
 
 local safe_forward
@@ -131,7 +154,7 @@ end
 
 local function fallback_direct_write_file(path, contents)
     local io_variants = {}
-    local mods_io = rawget(_G, "Mods") and rawget(Mods, "lua") and rawget(Mods.lua, "io")
+    local mods_io = Mods and Mods.lua and Mods.lua.io
     if mods_io then
         io_variants[#io_variants + 1] = mods_io
     end
@@ -145,6 +168,47 @@ local function fallback_direct_write_file(path, contents)
             local ok, file_or_err = pcall(io_api.open, path, "wb")
             if ok and file_or_err then
                 local file = file_or_err
+                local wrote = pcall(function()
+                    file:write(contents)
+                    if file.flush then
+                        file:flush()
+                    end
+                end)
+                pcall(function()
+                    if file.close then
+                        file:close()
+                    end
+                end)
+                if wrote then
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+local function append_text_file(path, contents)
+    if not path or not contents then
+        return false
+    end
+
+    local io_variants = {}
+    local mods_io = Mods and Mods.lua and Mods.lua.io
+    if mods_io then
+        io_variants[#io_variants + 1] = Mods.lua.io
+    end
+    local global_io = rawget(_G, "io")
+    if global_io then
+        io_variants[#io_variants + 1] = global_io
+    end
+
+    for _, io_api in ipairs(io_variants) do
+        if type(io_api) == "table" and type(io_api.open) == "function" then
+            local ok, handle_or_err = pcall(io_api.open, path, "ab")
+            if ok and handle_or_err then
+                local file = handle_or_err
                 local wrote = pcall(function()
                     file:write(contents)
                     if file.flush then
@@ -190,7 +254,7 @@ end
 
 local function fallback_locate_popen()
     local candidates = {}
-    local mods_io = rawget(_G, "Mods") and rawget(Mods, "lua") and rawget(Mods.lua, "io")
+    local mods_io = Mods and Mods.lua and Mods.lua.io
     if mods_io then
         candidates[#candidates + 1] = mods_io
     end
@@ -208,6 +272,157 @@ local function fallback_locate_popen()
     end
 
     return nil
+end
+
+local function add_trailing_slash(path)
+    if not path or path == "" then
+        return path
+    end
+    local last = path:sub(-1)
+    if last == "\\" or last == "/" then
+        return path
+    end
+    return path .. "\\"
+end
+
+local API_LOG_PATH = nil
+local api_log_guard = false
+
+local function api_log_enabled()
+    local value = mod:get("miniaudioaddon_api_log")
+    return value and true or false
+end
+
+local function ensure_api_log_path()
+    if API_LOG_PATH then
+        return API_LOG_PATH
+    end
+
+    if ensure_daemon_paths and ensure_daemon_paths() and MINIAUDIO_PIPE_DIRECTORY then
+        API_LOG_PATH = add_trailing_slash(MINIAUDIO_PIPE_DIRECTORY) .. "miniaudio_api_log.txt"
+        return API_LOG_PATH
+    end
+
+    if get_mod_filesystem_path then
+        local base = get_mod_filesystem_path()
+        if base then
+            API_LOG_PATH = add_trailing_slash(base) .. "miniaudio_api_log.txt"
+            return API_LOG_PATH
+        end
+    end
+
+    if DLS and DLS.get_mod_path then
+        local ok, root = pcall(DLS.get_mod_path, mod, nil, false)
+        if ok and root then
+            API_LOG_PATH = add_trailing_slash(root) .. "miniaudio_api_log.txt"
+            return API_LOG_PATH
+        end
+    end
+
+    return nil
+end
+
+local function write_api_log(fmt, ...)
+    if not api_log_enabled() or api_log_guard then
+        return
+    end
+
+    api_log_guard = true
+    local path = ensure_api_log_path()
+    if not path then
+        api_log_guard = false
+        return
+    end
+
+    local ok, line = pcall(string.format, fmt, ...)
+    if not ok then
+        line = fmt or ""
+    end
+
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    append_text_file(path, string.format("[%s] %s\n", timestamp or "?", line))
+    api_log_guard = false
+end
+
+local function announce_api_log_path()
+    if not mod:get("miniaudioaddon_api_log") then
+        return
+    end
+    local path = ensure_api_log_path()
+    if path then
+        mod:echo("[MiniAudioAddon] API log writing to: %s", path)
+    else
+        mod:echo("[MiniAudioAddon] API log enabled, but no log path is available.")
+    end
+end
+
+local function sanitize_api_label(label)
+    label = tostring(label or "external")
+    label = label:gsub("%s+", " "):gsub("[%[%]\r\n]", "?")
+    return label
+end
+
+function mod.api_log(arg1, arg2, ...)
+    if not api_log_enabled() then
+        return
+    end
+
+    local source = arg1
+    local fmt = arg2
+    local args = { ... }
+
+    if type(source) ~= "string" then
+        -- Colon usage or source omitted
+        local maybe_self = source
+        local resolved = nil
+        if type(maybe_self) == "table" and maybe_self.get_name then
+            local ok, name = pcall(maybe_self.get_name, maybe_self)
+            if ok then
+                resolved = name
+            end
+            fmt = arg2
+            args = { ... }
+        else
+            fmt = arg1
+            args = { arg2, ... }
+        end
+        source = resolved
+    end
+
+    if not fmt then
+        return
+    end
+
+    local ok, line = pcall(string.format, fmt, unpack_args(args))
+    if not ok then
+        line = fmt
+    end
+
+    write_api_log("EXT[%s] %s", sanitize_api_label(source or "external"), line)
+end
+
+if not mod._miniaudio_api_log_wrapped then
+    mod._miniaudio_api_log_wrapped = true
+    local original_echo = mod.echo
+    local original_error = mod.error
+
+    function mod:echo(fmt, ...)
+        if fmt and api_log_enabled() then
+            write_api_log("ECHO: " .. tostring(fmt), ...)
+        end
+        if original_echo then
+            return original_echo(self, fmt, ...)
+        end
+    end
+
+    function mod:error(fmt, ...)
+        if fmt and api_log_enabled() then
+            write_api_log("ERROR: " .. tostring(fmt), ...)
+        end
+        if original_error then
+            return original_error(self, fmt, ...)
+        end
+    end
 end
 
 local clamp = Utils.clamp or fallback_clamp
@@ -342,6 +557,7 @@ local spatial_marker_state = {
 local staged_payload_cleanups = {}
 
 local ensure_daemon_paths
+local get_mod_filesystem_path
 local ensure_daemon_ready_for_tests
 local ensure_listener_payload
 local ensure_daemon_active
@@ -800,21 +1016,26 @@ end
 
 local function daemon_send_json(payload)
     if not payload then
+        write_api_log("SKIP: missing payload")
         return false, "missing_payload"
     end
 
     if not spatial_mode_enabled() then
+        write_api_log("SKIP cmd=%s id=%s reason=spatial_disabled", tostring(payload.cmd), tostring(payload.id))
         return false, "spatial_disabled"
     end
 
     local daemon_ready = daemon_is_active()
     if not daemon_ready then
         if payload.cmd == "play" then
+            write_api_log("Daemon offline; attempting start for cmd=%s id=%s", tostring(payload.cmd), tostring(payload.id))
             if not ensure_daemon_active(payload.path) then
+                write_api_log("FAILED start cmd=%s id=%s reason=daemon_unavailable", tostring(payload.cmd), tostring(payload.id))
                 return false, "daemon_unavailable"
             end
             daemon_ready = daemon_is_active()
         else
+            write_api_log("SKIP cmd=%s id=%s reason=daemon_offline", tostring(payload.cmd), tostring(payload.id))
             if debug_enabled() then
                 mod:echo("[MiniAudioAddon] Ignoring cmd=%s (daemon offline).", tostring(payload.cmd))
             end
@@ -824,6 +1045,7 @@ local function daemon_send_json(payload)
 
     local ok, encoded, encode_err = encode_json_payload(payload)
     if not ok or not encoded then
+        write_api_log("ENCODE_FAIL cmd=%s id=%s reason=%s", tostring(payload.cmd), tostring(payload.id), tostring(encode_err))
         if debug_enabled() then
             mod:error("[MiniAudioAddon] Failed to encode daemon payload (cmd=%s id=%s): %s",
                 tostring(payload.cmd), tostring(payload.id), tostring(encode_err or "unknown"))
@@ -836,6 +1058,7 @@ local function daemon_send_json(payload)
             tostring(payload.cmd), tostring(encode_err))
     end
 
+    write_api_log("SEND cmd=%s id=%s payload=%s", tostring(payload.cmd), tostring(payload.id), encoded)
     if debug_enabled() then
         mod:echo("[MiniAudioAddon] Daemon send cmd=%s id=%s", tostring(payload.cmd), tostring(payload.id))
     end
@@ -845,6 +1068,7 @@ local function daemon_send_json(payload)
     end
 
     if deliver_daemon_payload(encoded) then
+        write_api_log("DELIVERED cmd=%s id=%s immediate", tostring(payload.cmd), tostring(payload.id))
         handle_daemon_payload_delivery(payload)
         handle_daemon_stop_delivery(payload)
         return true, false
@@ -860,6 +1084,7 @@ local function daemon_send_json(payload)
         payload = payload,
     }
 
+    write_api_log("QUEUED cmd=%s id=%s attempts=%d", tostring(payload.cmd), tostring(payload.id), 1)
     if debug_enabled() then
         mod:echo("[MiniAudioAddon] Daemon send deferred (cmd=%s id=%s); waiting for IPC.", tostring(payload.cmd), tostring(payload.id))
     end
@@ -882,6 +1107,7 @@ local function flush_pending_daemon_messages()
             handle_daemon_payload_delivery(entry.payload or entry)
             handle_daemon_stop_delivery(entry.payload or entry)
             table.remove(daemon_pending_messages, idx)
+            write_api_log("RETRY_DELIVERED cmd=%s id=%s attempts=%d", tostring(entry.cmd), tostring(entry.id), entry.attempts)
         else
             entry.attempts = entry.attempts + 1
             entry.next_attempt = rt_now + PIPE_RETRY_DELAY
@@ -894,6 +1120,7 @@ local function flush_pending_daemon_messages()
                 handle_daemon_play_failure(entry.payload or entry)
                 handle_daemon_stop_failure(entry.payload or entry)
                 table.remove(daemon_pending_messages, idx)
+                write_api_log("RETRY_FAILED cmd=%s id=%s attempts=%d reason=timeout", tostring(entry.cmd), tostring(entry.id), entry.attempts)
             else
                 idx = idx + 1
             end
@@ -1301,7 +1528,7 @@ local function join_path(base, fragment)
     return ensure_trailing_separator(base) .. fragment
 end
 
-local function get_mod_filesystem_path()
+get_mod_filesystem_path = function()
     if MOD_FILESYSTEM_PATH then
         return MOD_FILESYSTEM_PATH
     end
@@ -1440,8 +1667,13 @@ local function clear_marker(state)
     end
 
     if state.line_object and state.line_world and LineObject then
-        LineObject.reset(state.line_object)
-        LineObject.dispatch(state.line_world, state.line_object)
+        local ok = pcall(LineObject.reset, state.line_object)
+        if ok then
+            LineObject.dispatch(state.line_world, state.line_object)
+        else
+            state.line_object = nil
+            state.line_world = nil
+        end
     end
 
     local debug_text = Managers and Managers.state and Managers.state.debug_text
@@ -1467,7 +1699,12 @@ local function draw_marker(state, position, rotation)
 
     local line_object, world = ensure_marker_line_object(state)
     if line_object and world and LineObject.add_sphere then
-        LineObject.reset(line_object)
+        local ok = pcall(LineObject.reset, line_object)
+        if not ok then
+            state.line_object = nil
+            state.line_world = nil
+            return
+        end
     local Color = rawget(_G, "Color")
     local sphere_color = Color and Color(255, 255, 200, 80) or nil
         LineObject.add_sphere(line_object, sphere_color, position, 0.3, 16, 12)
@@ -1645,6 +1882,9 @@ local function daemon_log_path()
 end
 
 local function clear_daemon_log_file(reason)
+    if mod:get("miniaudioaddon_clear_logs") == false then
+        return false
+    end
     local path = daemon_log_path()
     if not path then
         return false
@@ -2252,6 +2492,18 @@ function mod:set_client_active(client_id, has_active)
     end
 end
 
+function mod:_set_keepalive(active)
+    self._keepalive_flag = active and true or false
+    self:set_client_active("MiniAudioAddon_keepalive", self._keepalive_flag)
+end
+
+function mod:ensure_daemon_keepalive()
+    self:_set_keepalive(true)
+    if not daemon_is_active() then
+        daemon_start("", 1.0, 0.0)
+    end
+end
+
 function mod:on_generation_reset(callback)
     generation_callback = callback
 end
@@ -2270,7 +2522,9 @@ local function report_manual_error(reason)
     end
 end
 
-local function command_set_volume(value)
+local Commands = {}
+
+function Commands.set_volume(value)
     if not value then
         mod:echo("Usage: /miniaudio_volume <value>")
         return
@@ -2298,10 +2552,10 @@ local function command_set_volume(value)
     mod:echo("[MiniAudioAddon] Manual volume set -> %.0f%% (%.2f).", volume_linear * 100, volume_linear)
 end
 
-mod:command("miniaudio_volume", "Set daemon playback volume (0..3 linear or 0..300%).", command_set_volume)
-mod:command("elevatormusic_volume", "Alias for /miniaudio_volume.", command_set_volume)
+mod:command("miniaudio_volume", "Set daemon playback volume (0..3 linear or 0..300%).", Commands.set_volume)
+mod:command("elevatormusic_volume", "Alias for /miniaudio_volume.", Commands.set_volume)
 
-local function command_set_pan(value)
+function Commands.set_pan(value)
     if not value then
         mod:echo("Usage: /miniaudio_pan <value>")
         return
@@ -2324,10 +2578,10 @@ local function command_set_pan(value)
     mod:echo("[MiniAudioAddon] Manual pan set -> %.3f.", pan)
 end
 
-mod:command("miniaudio_pan", "Set daemon playback pan (-1.0 = left, 1.0 = right).", command_set_pan)
-mod:command("elevatormusic_pan", "Alias for /miniaudio_pan.", command_set_pan)
+mod:command("miniaudio_pan", "Set daemon playback pan (-1.0 = left, 1.0 = right).", Commands.set_pan)
+mod:command("elevatormusic_pan", "Alias for /miniaudio_pan.", Commands.set_pan)
 
-local function command_manual_clear()
+function Commands.manual_clear()
     if not daemon_manual_override then
         mod:echo("[MiniAudioAddon] No manual daemon overrides are active.")
         return
@@ -2337,8 +2591,8 @@ local function command_manual_clear()
     mod:echo("[MiniAudioAddon] Manual daemon overrides cleared; automatic control restored.")
 end
 
-mod:command("miniaudio_manual_clear", "Release manual daemon overrides so automatic mixing resumes.", command_manual_clear)
-mod:command("elevatormusic_manual_clear", "Alias for /miniaudio_manual_clear.", command_manual_clear)
+mod:command("miniaudio_manual_clear", "Release manual daemon overrides so automatic mixing resumes.", Commands.manual_clear)
+mod:command("elevatormusic_manual_clear", "Alias for /miniaudio_manual_clear.", Commands.manual_clear)
 
 local function collect_command_args(...)
     local args = { ... }
@@ -2507,7 +2761,7 @@ local function resolve_simple_track(choice)
     return resolved
 end
 
-local function start_emitter_track(resolved_path, distance)
+local function start_emitter_track(resolved_path, distance, absolute_profile)
     if not resolved_path then
         return false
     end
@@ -2559,10 +2813,15 @@ local function start_emitter_track(resolved_path, distance)
 
     local emitter_profile = default_profile()
     local distance_scale = mod:spatial_distance_scale()
-    local emitter_min_distance = clamp(distance_clamped * 0.25 * distance_scale, 0.5, 25.0)
-    local emitter_max_distance = clamp(distance_clamped * 5.0 * distance_scale, emitter_min_distance + 5.0, 150.0)
-    emitter_profile.min_distance = emitter_min_distance
-    emitter_profile.max_distance = emitter_max_distance
+    if absolute_profile then
+        emitter_profile.min_distance = clamp(1.0 * distance_scale, 0.35, 10.0)
+        emitter_profile.max_distance = clamp(30.0 * distance_scale, emitter_profile.min_distance + 1.0, 200.0)
+    else
+        local emitter_min_distance = clamp(distance_clamped * 0.25 * distance_scale, 0.5, 25.0)
+        local emitter_max_distance = clamp(distance_clamped * 5.0 * distance_scale, emitter_min_distance + 5.0, 150.0)
+        emitter_profile.min_distance = emitter_min_distance
+        emitter_profile.max_distance = emitter_max_distance
+    end
 
     local track = {
         id = TRACK_IDS.emitter,
@@ -2651,8 +2910,17 @@ cleanup_emitter_state = function(reason, silent)
         return true
     end
 
-    local ok, queued = daemon_send_stop(state.track_id, state.fade or 0.35)
+    local ok, queued, detail = daemon_send_stop(state.track_id, state.fade or 0.35)
+    local reason = detail
     if not ok then
+        if reason == "daemon_offline" then
+            emitter_state = nil
+            purge_payload_files()
+            if message then
+                mod:echo(message)
+            end
+            return true
+        end
         state.pending_message = nil
         state.pending_stop = false
         if not silent then
@@ -2691,7 +2959,7 @@ finalize_emitter_stop = function()
     end
 end
 
-local function command_test_play(...)
+function Commands.test_play(...)
     local args = collect_command_args(...)
     if #args == 0 then
         mod:echo("Usage: /miniaudio_test_play <absolute-or-relative-path>")
@@ -2708,7 +2976,7 @@ local function command_test_play(...)
     start_manual_track(resolved)
 end
 
-local function command_test_stop()
+function Commands.test_stop()
     if not manual_track_path and not manual_track_stop_pending then
         mod:echo("[MiniAudioAddon] No manual daemon track is active.")
         return
@@ -2717,10 +2985,10 @@ local function command_test_stop()
     stop_manual_track(false)
 end
 
-mod:command("miniaudio_test_play", "Play a file through the daemon once spatial mode is enabled. Usage: /miniaudio_test_play <path>", command_test_play)
-mod:command("miniaudio_test_stop", "Stop the manual daemon playback triggered by /miniaudio_test_play.", command_test_stop)
+mod:command("miniaudio_test_play", "Play a file through the daemon once spatial mode is enabled. Usage: /miniaudio_test_play <path>", Commands.test_play)
+mod:command("miniaudio_test_stop", "Stop the manual daemon playback triggered by /miniaudio_test_play.", Commands.test_stop)
 
-local function command_emit_start(...)
+function Commands.emit_start(...)
     local args = collect_command_args(...)
     if #args == 0 then
         mod:echo("Usage: /miniaudio_emit_start <path> [distance]")
@@ -2743,10 +3011,36 @@ local function command_emit_start(...)
         return
     end
 
-    start_emitter_track(resolved, distance_arg and tonumber(distance_arg) or nil)
+    start_emitter_track(resolved, distance_arg and tonumber(distance_arg) or nil, false)
 end
 
-local function command_emit_stop()
+function Commands.emit_start_absolute(...)
+    local args = collect_command_args(...)
+    if #args == 0 then
+        mod:echo("Usage: /miniaudio_emit_start_absolute <path> [distance]")
+        return
+    end
+
+    local distance_arg = nil
+    if #args >= 2 then
+        local maybe_distance = tonumber(args[#args])
+        if maybe_distance then
+            distance_arg = maybe_distance
+            args[#args] = nil
+        end
+    end
+
+    local raw_path = table.concat(args, " ")
+    local resolved = expand_track_path(raw_path)
+    if not resolved then
+        mod:echo("[MiniAudioAddon] Could not find audio file: %s", tostring(raw_path))
+        return
+    end
+
+    start_emitter_track(resolved, distance_arg and tonumber(distance_arg) or nil, true)
+end
+
+function Commands.emit_stop()
     if not emitter_state then
         mod:echo("[MiniAudioAddon] No emitter test is active.")
         return
@@ -2755,10 +3049,11 @@ local function command_emit_stop()
     cleanup_emitter_state("[MiniAudioAddon] Emitter test stopped.", false)
 end
 
-mod:command("miniaudio_emit_start", "Spawn a debug cube in front of you that emits audio. Usage: /miniaudio_emit_start <path> [distance]", command_emit_start)
-mod:command("miniaudio_emit_stop", "Stop and remove the debug audio emitter cube.", command_emit_stop)
+mod:command("miniaudio_emit_start", "Spawn a debug cube in front of you that emits audio. Usage: /miniaudio_emit_start <path> [distance]", Commands.emit_start)
+mod:command("miniaudio_emit_start_absolute", "Spawn a debug cube with absolute distance attenuation. Usage: /miniaudio_emit_start_absolute <path> [distance]", Commands.emit_start_absolute)
+mod:command("miniaudio_emit_stop", "Stop and remove the debug audio emitter cube.", Commands.emit_stop)
 
-local function command_simple_play(choice)
+function Commands.simple_play(choice)
     local resolved = resolve_simple_track(choice)
     if resolved then
         start_manual_track(resolved)
@@ -2779,7 +3074,7 @@ local function parse_simple_distance_and_choice(a, b)
     return distance, choice
 end
 
-local function command_simple_emit(arg1, arg2)
+function Commands.simple_emit(arg1, arg2)
     local distance, choice = parse_simple_distance_and_choice(arg1, arg2)
     local resolved = resolve_simple_track(choice)
     if resolved then
@@ -2787,7 +3082,7 @@ local function command_simple_emit(arg1, arg2)
     end
 end
 
-local function command_simple_spatial(mode, choice)
+function Commands.simple_spatial(mode, choice)
     local resolved = resolve_simple_track(choice)
     if not resolved then
         return
@@ -2795,23 +3090,23 @@ local function command_simple_spatial(mode, choice)
 
     mode = mode and mode:lower() or "orbit"
     if mode == "orbit" then
-        command_spatial_test("orbit", "4", "6", "0", resolved)
+        Commands.spatial_test("orbit", "4", "6", "0", resolved)
     elseif mode == "direction" or mode == "directional" then
-        command_spatial_test("direction", "0", "0", "6", resolved)
+        Commands.spatial_test("direction", "0", "0", "6", resolved)
     elseif mode == "follow" then
-        command_spatial_test("follow", resolved, "0", "0", "0")
+        Commands.spatial_test("follow", resolved, "0", "0", "0")
     elseif mode == "loop" then
-        command_spatial_test("loop", "6", "8", "0", resolved)
+        Commands.spatial_test("loop", "6", "8", "0", resolved)
     elseif mode == "spin" then
-        command_spatial_test("spin", "4", "6", "0", resolved)
+        Commands.spatial_test("spin", "4", "6", "0", resolved)
     else
         mod:echo("[MiniAudioAddon] Unknown simple spatial mode: %s", tostring(mode))
     end
 end
 
-mod:command("miniaudio_simple_play", "Play the bundled sample tracks (usage: /miniaudio_simple_play [mp3|wav]).", command_simple_play)
-mod:command("miniaudio_simple_emit", "Spawn the sample emitter cube (usage: /miniaudio_simple_emit [distance] [mp3|wav]).", command_simple_emit)
-mod:command("miniaudio_simple_spatial", "Run spatial tests using the bundled tracks (usage: /miniaudio_simple_spatial <orbit|direction|follow|loop> [mp3|wav]).", command_simple_spatial)
+mod:command("miniaudio_simple_play", "Play the bundled sample tracks (usage: /miniaudio_simple_play [mp3|wav]).", Commands.simple_play)
+mod:command("miniaudio_simple_emit", "Spawn the sample emitter cube (usage: /miniaudio_simple_emit [distance] [mp3|wav]).", Commands.simple_emit)
+mod:command("miniaudio_simple_spatial", "Run spatial tests using the bundled tracks (usage: /miniaudio_simple_spatial <orbit|direction|follow|loop> [mp3|wav]).", Commands.simple_spatial)
 mod:command("miniaudio_simple_stop", "Stop the bundled sample playback/emitter.", function()
     local acted = false
 
@@ -2830,7 +3125,7 @@ mod:command("miniaudio_simple_stop", "Stop the bundled sample playback/emitter."
     end
 end)
 
-local function command_cleanup_payloads()
+function Commands.cleanup_payloads()
     ensure_daemon_paths()
     if not MINIAUDIO_PIPE_DIRECTORY then
         mod:echo("[MiniAudioAddon] Payload directory not resolved; nothing to clean.")
@@ -2841,7 +3136,7 @@ local function command_cleanup_payloads()
     mod:echo(string.format("[MiniAudioAddon] Cleared payload files under %s", MINIAUDIO_PIPE_DIRECTORY))
 end
 
-mod:command("miniaudio_cleanup_payloads", "Delete leftover miniaudio payload files beside the daemon.", command_cleanup_payloads)
+mod:command("miniaudio_cleanup_payloads", "Delete leftover miniaudio payload files beside the daemon.", Commands.cleanup_payloads)
 
 ensure_listener_payload = function()
     local payload = build_listener_payload()
@@ -2880,6 +3175,7 @@ local function init_api_layer()
         spatial_mode_enabled = spatial_mode_enabled,
         now = now,
         realtime_now = realtime_now,
+        logger = write_api_log,
     })
 
     if api then
@@ -2890,6 +3186,11 @@ local function init_api_layer()
 end
 
 init_api_layer()
+
+function mod.on_all_mods_loaded()
+    mod:ensure_daemon_keepalive()
+    announce_api_log_path()
+end
 
 ensure_daemon_ready_for_tests = function(path_hint)
     if daemon_is_running or daemon_pending_start or daemon_has_known_process then
@@ -3109,7 +3410,7 @@ update_spatial_test = function()
     end
 end
 
-local function command_spatial_test(mode, ...)
+function Commands.spatial_test(mode, ...)
     mode = mode and string.lower(mode) or "orbit"
     local args = collect_command_args(...)
 
@@ -3358,9 +3659,10 @@ local function command_spatial_test(mode, ...)
     end
 end
 
-mod:command("miniaudio_spatial_test", "Run spatial daemon tests. Usage: /miniaudio_spatial_test <orbit|direction|follow|loop|spin|stop> [...].", command_spatial_test)
-mod:command("elevatormusic_spatial_test", "Alias for /miniaudio_spatial_test.", command_spatial_test)
+mod:command("miniaudio_spatial_test", "Run spatial daemon tests. Usage: /miniaudio_spatial_test <orbit|direction|follow|loop|spin|stop> [...].", Commands.spatial_test)
+mod:command("elevatormusic_spatial_test", "Alias for /miniaudio_spatial_test.", Commands.spatial_test)
 mod.on_disabled = function()
+    mod:_set_keepalive(false)
     active_clients = {}
     spatial_test_stop("disabled")
     clear_spatial_marker()
@@ -3379,6 +3681,7 @@ mod.on_disabled = function()
 end
 
 mod.on_unload = function()
+    mod:_set_keepalive(false)
     clear_daemon_log_file("mod_unload")
 end
 
@@ -3388,9 +3691,28 @@ mod.on_game_state_changed = function(status, state_name)
     end
 end
 
+function mod.on_setting_changed(setting_id)
+    if setting_id == "miniaudioaddon_api_log" then
+        if mod:get("miniaudioaddon_api_log") then
+            announce_api_log_path()
+        else
+            mod:echo("[MiniAudioAddon] API log disabled.")
+        end
+    end
+end
+
 mod.update = function(dt)
     if spatial_mode_enabled() then
         flush_pending_daemon_messages()
+    end
+
+    if mod._keepalive_flag and not daemon_is_active() then
+        mod:ensure_daemon_keepalive()
+    end
+
+    if mod.api and mod.api.tracks_count and mod.set_client_active then
+        local has_tracks = (mod.api.tracks_count() or 0) > 0
+        mod:set_client_active(mod:get_name(), has_tracks)
     end
 
     if staged_payload_cleanups and #staged_payload_cleanups > 0 then
@@ -3567,3 +3889,10 @@ mod.update = function(dt)
 end
 
 return mod
+--[[
+    File: MiniAudioAddon.lua
+    Description: Core MiniAudioAddon implementation that manages the MiniAudio daemon,
+    exposes the public API used by other mods, and maintains diagnostics utilities.
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
+]]

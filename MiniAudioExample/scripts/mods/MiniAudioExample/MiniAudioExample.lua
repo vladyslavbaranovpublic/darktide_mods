@@ -7,6 +7,8 @@ local Imgui = rawget(_G, "Imgui")
 local Vector3 = rawget(_G, "Vector3")
 local Quaternion = rawget(_G, "Quaternion")
 local Matrix4x4 = rawget(_G, "Matrix4x4")
+local PoseTrackerModule = MiniAudio and MiniAudio.pose_tracker
+local DaemonBridge = MiniAudio and MiniAudio.daemon_bridge
 
 local function locate_popen()
     local io_variants = {}
@@ -45,6 +47,21 @@ end
 local SAMPLE_TRACKS = {
     mp3 = default_sample_path("Audio\\test\\Free_Test_Data_2MB_MP3.mp3"),
     wav = default_sample_path("Audio\\test\\Free_Test_Data_2MB_WAV.wav"),
+}
+
+local LOG_CONFIGS = {
+    api = {
+        key = "api",
+        title = "MiniAudio Logs - API",
+        relative_path = "miniaudio_api_log.txt",
+        order = 1,
+    },
+    daemon = {
+        key = "daemon",
+        title = "MiniAudio Logs - Daemon",
+        relative_path = "Audio\\bin\\miniaudio_dt_log.txt",
+        order = 2,
+    },
 }
 
 local CURSOR_TOKEN = "MiniAudioExampleCursor"
@@ -168,6 +185,21 @@ local function default_status_window_rect()
     return pos_x, pos_y, width, height
 end
 
+local function default_log_window_rect(order)
+    order = order or 1
+    local screen_w, screen_h = resolution_size()
+    local margin = 18
+    local width = math.min(640, math.max(360, screen_w - margin * 3))
+    local height = 260
+    local pos_x = margin
+    local spacing = 10
+    local pos_y = margin + (order - 1) * (height + spacing)
+    if pos_y + height > screen_h - margin then
+        pos_y = math.max(margin, screen_h - height - margin)
+    end
+    return pos_x, pos_y, width, height
+end
+
 local state = {
     window_open = false,
     window_main_initialized = false,
@@ -259,7 +291,12 @@ local state = {
     macro_tracks = {},
     random_stop_queue = {},
     spatial_override_active = false,
+    log_windows = {
+        api = { lines = {}, next_refresh = 0 },
+        daemon = { lines = {}, next_refresh = 0 },
+    },
 }
+local emitter_preview = nil
 
 local function vec3_to_array(vec)
     if Vector3 and vec then
@@ -336,6 +373,75 @@ local function add_scaled(base, dir, scalar)
     return result
 end
 
+local function helpers_ready()
+    local addon = ensure_addon()
+    if addon then
+        PoseTrackerModule = addon.pose_tracker or PoseTrackerModule
+        DaemonBridge = addon.daemon_bridge or DaemonBridge
+    end
+    return PoseTrackerModule and PoseTrackerModule.new and DaemonBridge and DaemonBridge.play
+end
+
+local function stop_preview_emitter()
+    if emitter_preview and helpers_ready() then
+        DaemonBridge.stop(emitter_preview.id, 0)
+        emitter_preview = nil
+        append_log("Emitter preview stopped")
+    else
+        emitter_preview = nil
+    end
+end
+
+local function start_preview_emitter(absolute)
+    if not helpers_ready() then
+        append_log("MiniAudioAddon pose helpers unavailable; falling back to DMF commands.")
+        return false
+    end
+
+    local ctx = capture_listener_context()
+    if not ctx then
+        append_log("Listener pose unavailable; cannot spawn preview emitter.")
+        return false
+    end
+
+    local distance = tonumber(state.emitter_distance) or 4
+    local spawn = add_scaled(ctx.position, ctx.forward_vec, distance)
+    local tracker = PoseTrackerModule.new({ height_offset = 0 })
+    tracker:set_manual(spawn, ctx.forward_vec, nil)
+
+    local source = tracker:source_payload()
+    if not source then
+        append_log("Failed to build emitter source payload.")
+        return false
+    end
+
+    local payload = {
+        id = unique_id("maeEmit"),
+        path = state.emit_path,
+        loop = true,
+        volume = 1.0,
+        profile = absolute and { min_distance = 1.0, max_distance = 30.0, rolloff = "linear" } or build_profile(),
+        source = source,
+        listener = ctx.listener,
+        autoplay = true,
+        require_listener = true,
+    }
+
+    local ok, detail = DaemonBridge.play(payload)
+    if not ok then
+        append_log("Emitter preview failed: %s", tostring(detail or "unknown"))
+        return false
+    end
+
+    emitter_preview = {
+        id = payload.id,
+        tracker = tracker,
+    }
+
+    append_log("Emitter preview spawned %.1fm ahead.", distance)
+    return true
+end
+
 local function build_source_from_context(ctx, offsets)
     if not ctx or not ctx.position then
         return nil
@@ -361,6 +467,34 @@ local function build_source_from_context(ctx, offsets)
     }
 end
 
+local function ensure_addon()
+    if not MiniAudio then
+        MiniAudio = get_mod("MiniAudioAddon")
+    end
+    return MiniAudio
+end
+
+local function debug_logging_enabled()
+    local ok, value = pcall(mod.get, mod, "mae_debug_logging")
+    return ok and value == true
+end
+
+local function log_api_message(message)
+    if not debug_logging_enabled() then
+        return
+    end
+
+    local addon = ensure_addon()
+    if not addon or not addon.api_log then
+        return
+    end
+
+    local ok, err = pcall(addon.api_log, addon, "[MiniAudioExample] %s", tostring(message))
+    if not ok and mod and mod.echo then
+        mod:echo("[MiniAudioExample] API log failed: %s", tostring(err))
+    end
+end
+
 local function append_log(fmt, ...)
     local message = fmt
     if select("#", ...) > 0 then
@@ -373,6 +507,8 @@ local function append_log(fmt, ...)
     while #state.log_lines > state.log_limit do
         table.remove(state.log_lines, 1)
     end
+
+    log_api_message(message)
 end
 
 local function require_listener_context()
@@ -381,13 +517,6 @@ local function require_listener_context()
         append_log("Listener pose unavailable; enter gameplay before running this action.")
     end
     return ctx
-end
-
-local function ensure_addon()
-    if not MiniAudio then
-        MiniAudio = get_mod("MiniAudioAddon")
-    end
-    return MiniAudio
 end
 
 local function ensure_api()
@@ -534,6 +663,144 @@ local function parse_number(value)
         end
     end
     return nil
+end
+
+local function parse_process_identifier(value)
+    if value == nil then
+        return nil
+    end
+    if type(value) == "number" then
+        return value
+    end
+    if type(value) == "string" then
+        local trimmed = value:gsub("^%s+", ""):gsub("%s+$", "")
+        if trimmed == "" then
+            return nil
+        end
+        local numeric = tonumber(trimmed)
+        if numeric then
+            return numeric
+        end
+        return trimmed
+    end
+    return nil
+end
+
+local function read_file_tail(path, max_bytes, line_limit)
+    if not path or path == "" then
+        return nil, "missing_path"
+    end
+
+    local io_variants = {}
+    if Mods and Mods.lua and Mods.lua.io then
+        io_variants[#io_variants + 1] = Mods.lua.io
+    end
+    local global_io = rawget(_G, "io")
+    if global_io then
+        io_variants[#io_variants + 1] = global_io
+    end
+
+    for _, io_api in ipairs(io_variants) do
+        if type(io_api) == "table" and type(io_api.open) == "function" then
+            local ok, handle_or_err = pcall(io_api.open, path, "rb")
+            if ok and handle_or_err then
+                local file = handle_or_err
+                local ok_seek, size = pcall(function()
+                    return file:seek("end")
+                end)
+                local content = nil
+                if ok_seek and size then
+                    local offset = math.max(0, size - (max_bytes or 65536))
+                    pcall(function()
+                        file:seek("set", offset)
+                    end)
+                    local ok_read, data = pcall(function()
+                        return file:read("*a")
+                    end)
+                    if ok_read and data then
+                        content = data
+                    end
+                end
+
+                pcall(function()
+                    file:close()
+                end)
+
+                if content then
+                    local normalized = content:gsub("\r\n", "\n")
+                    local lines = {}
+                    for line in normalized:gmatch("([^\n]+)") do
+                        lines[#lines + 1] = line
+                    end
+                    local limit = line_limit or 400
+                    if #lines > limit then
+                        local trimmed = {}
+                        local start_index = #lines - limit + 1
+                        for index = start_index, #lines do
+                            trimmed[#trimmed + 1] = lines[index]
+                        end
+                        lines = trimmed
+                    end
+                    return lines
+                end
+            end
+        end
+    end
+
+    return nil, "unavailable"
+end
+
+local function ensure_log_view_state(key)
+    state.log_windows = state.log_windows or {}
+    local view = state.log_windows[key]
+    if not view then
+        view = {
+            lines = {},
+            next_refresh = 0,
+        }
+        state.log_windows[key] = view
+    end
+
+    local cfg = LOG_CONFIGS[key]
+    if cfg and (not view.path or view.path == "") then
+        view.path = default_sample_path(cfg.relative_path)
+    end
+
+    return view
+end
+
+local function update_external_log_view(view)
+    local now_time = os.clock() or 0
+    if view.next_refresh and view.next_refresh > now_time then
+        return
+    end
+    view.next_refresh = now_time + (view.interval or 1.0)
+
+    local lines, err = read_file_tail(view.path, view.max_bytes or 131072, view.line_limit or 400)
+    if not lines then
+        view.lines = { string.format("Log unavailable (%s)", tostring(err or "unknown")) }
+        return
+    end
+
+    if #lines == 0 then
+        view.lines = { "(log is empty)" }
+    else
+        view.lines = lines
+    end
+end
+
+local function open_log_location(path)
+    if not path or path == "" then
+        append_log("Log path unavailable; nothing to open.")
+        return
+    end
+
+    local normalized = path:gsub("/", "\\")
+    local command = string.format([[cmd /C start "" explorer.exe /select,"%s"]], normalized)
+    local ok, err = pcall(os.execute, command)
+    if not ok then
+        append_log("Explorer launch failed for %s (%s)", normalized, tostring(err or "unknown"))
+    end
 end
 
 local function clamp(value, min_value, max_value)
@@ -783,12 +1050,12 @@ local function build_random_payload(path, overrides)
     end
     local id = overrides.id or forced_id or string.format("%s_%05d", state.random_id_prefix, math.random(10000, 99999))
 
-    local process_id = parse_number(overrides.process_id)
+    local process_id = parse_process_identifier(overrides.process_id)
     if not process_id then
-        process_id = parse_number(state.random_override_process)
+        process_id = parse_process_identifier(state.random_override_process)
     end
     if not process_id then
-        process_id = parse_number(state.random_process)
+        process_id = parse_process_identifier(state.random_process)
     end
     local loop_flag = overrides.loop
     if loop_flag == nil then
@@ -924,7 +1191,7 @@ local function draw_play_controls(api)
             profile = build_profile(),
             effects = build_effects(),
             source = build_source_payload(ctx),
-            process_id = parse_number(state.process_id),
+        process_id = parse_process_identifier(state.process_id),
             start_seconds = parse_number(state.start_seconds),
             seek_seconds = parse_number(state.seek_seconds),
             skip_seconds = parse_number(state.skip_seconds),
@@ -957,7 +1224,7 @@ local function draw_play_controls(api)
         submit_play(SAMPLE_TRACKS.wav)
     end
 
-    state.process_id = Imgui.input_text("Process ID (optional number)", state.process_id or "")
+    state.process_id = Imgui.input_text("Process ID (optional)", state.process_id or "")
     state.loop = Imgui.checkbox("Loop playback", state.loop)
     state.autoplay = Imgui.checkbox("Autoplay when ready", state.autoplay)
 
@@ -1075,11 +1342,11 @@ local function draw_transport_controls(api)
     Imgui.same_line()
     Imgui.push_id("stop_process_button")
     if Imgui.button("Stop process id") then
-        local pid = parse_number(state.stop_process)
+        local pid = parse_process_identifier(state.stop_process)
         if pid then
             run_api("stop_process", api.stop_process, pid)
         else
-            append_log("Provide a numeric process id.")
+            append_log("Provide a process id (number or name).")
         end
     end
     Imgui.pop_id()
@@ -1236,12 +1503,37 @@ local function draw_cli_shortcuts()
     Imgui.text("Emitter sandbox")
     state.emit_path = Imgui.input_text("Emitter path", state.emit_path)
     state.emitter_distance = Imgui.input_text("Emitter distance", state.emitter_distance)
+    local helpers_available = helpers_ready()
+    local function start_emitter_button(absolute)
+        if helpers_available then
+            start_preview_emitter(absolute)
+        else
+            run_dmf_command(absolute and "miniaudio_emit_start_absolute" or "miniaudio_emit_start", state.emit_path, state.emitter_distance)
+        end
+    end
+
     if Imgui.button("Emit start (sphere)") then
-        run_dmf_command("miniaudio_emit_start", state.emit_path, state.emitter_distance)
+        start_emitter_button(false)
     end
     Imgui.same_line()
     if Imgui.button("Emit stop") then
-        run_dmf_command("miniaudio_emit_stop")
+        if helpers_available then
+            stop_preview_emitter()
+        else
+            run_dmf_command("miniaudio_emit_stop")
+        end
+    end
+    Imgui.same_line()
+    if Imgui.button("Emit start (absolute)") then
+        start_emitter_button(true)
+    end
+    Imgui.same_line()
+    if Imgui.button("Emit stop (absolute)") then
+        if helpers_available then
+            stop_preview_emitter()
+        else
+            run_dmf_command("miniaudio_emit_stop")
+        end
     end
 
     Imgui.separator()
@@ -1405,6 +1697,84 @@ local function draw_log_panel()
         Imgui.text(state.log_lines[index])
     end
     Imgui.end_child_window()
+end
+
+local function draw_external_log_window(kind, cfg)
+    if not Imgui then
+        return
+    end
+
+    local view = ensure_log_view_state(kind)
+    view.interval = view.interval or 1.0
+    view.max_bytes = view.max_bytes or cfg.max_bytes or 131072
+    view.line_limit = view.line_limit or cfg.line_limit or 400
+    view.path = view.path or cfg.path or default_sample_path(cfg.relative_path)
+
+    update_external_log_view(view)
+
+    if not view.window_initialized then
+        local pos_x, pos_y, width, height = default_log_window_rect(cfg.order or 1)
+        if Imgui.set_next_window_size then
+            Imgui.set_next_window_size(width, height)
+        end
+        if Imgui.set_next_window_pos then
+            Imgui.set_next_window_pos(pos_x, pos_y)
+        end
+    end
+
+    local _, closed = Imgui.begin_window(cfg.title, "horizontal_scrollbar")
+    if closed then
+        view.window_initialized = false
+        Imgui.end_window()
+        return
+    end
+    view.window_initialized = true
+
+    Imgui.text(string.format("Path: %s", view.path or "unknown"))
+    if Imgui.button(string.format("Open location##%s", kind)) then
+        open_log_location(view.path)
+    end
+    Imgui.same_line()
+    if Imgui.button(string.format("Refresh##%s", kind)) then
+        view.next_refresh = 0
+        update_external_log_view(view)
+    end
+
+    local child_height = 200
+    if Imgui.get_content_region_avail then
+        local avail = { Imgui.get_content_region_avail() }
+        if avail[2] and avail[2] > 0 then
+            child_height = math.max(80, avail[2])
+        end
+    elseif Imgui.get_window_size and Imgui.get_cursor_pos then
+        local win_size = { Imgui.get_window_size() }
+        local cursor = { Imgui.get_cursor_pos() }
+        local available = (win_size[2] or 0) - (cursor[2] or 0) - 20
+        if available and available > 0 then
+            child_height = math.max(80, available)
+        end
+    end
+
+    Imgui.begin_child_window(string.format("%s_log_content", kind), 0, child_height, true, "horizontal_scrollbar")
+    for _, line in ipairs(view.lines or {}) do
+        Imgui.text(line)
+    end
+    Imgui.end_child_window()
+
+    Imgui.end_window()
+end
+
+local function render_log_windows()
+    if not state.window_open then
+        return
+    end
+
+    for _, cfg in ipairs({ LOG_CONFIGS.api, LOG_CONFIGS.daemon }) do
+        if cfg then
+            cfg.path = cfg.path or default_sample_path(cfg.relative_path)
+            draw_external_log_window(cfg.key, cfg)
+        end
+    end
 end
 
 local function unique_id(prefix)
@@ -1712,6 +2082,11 @@ end
 local function reset_window_layout()
     state.window_main_initialized = false
     state.window_status_initialized = false
+    if state.log_windows then
+        for _, view in pairs(state.log_windows) do
+            view.window_initialized = false
+        end
+    end
 end
 
 local function render_window()
@@ -1809,6 +2184,8 @@ local function render_window()
     else
         Imgui.end_window()
     end
+
+    render_log_windows()
 end
 
 function mod.toggle_window()
@@ -1884,12 +2261,14 @@ function mod.on_unload()
     close_window(true)
     stop_macro_tracks()
     release_spatial_override()
+    stop_preview_emitter()
 end
 
 function mod.on_disabled()
     close_window(true)
     stop_macro_tracks()
     release_spatial_override()
+    stop_preview_emitter()
 end
 
 mod:hook("UIManager", "using_input", function(func, ...)
@@ -1898,3 +2277,10 @@ mod:hook("UIManager", "using_input", function(func, ...)
     end
     return func(...)
 end)
+--[[
+    File: MiniAudioExample.lua
+    Description: ImGui-based sandbox and QA harness that exercises every MiniAudioAddon
+    API feature directly in-game for troubleshooting and demonstration.
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
+]]

@@ -41,6 +41,48 @@ function Utils.realtime_now()
     return os.clock()
 end
 
+local function resolve_local_player()
+    if not Managers or not Managers.player then
+        return nil
+    end
+
+    local manager = Managers.player
+
+    local function try_call(method, ...)
+        local target = manager[method]
+        if type(target) ~= "function" then
+            return nil
+        end
+        local ok, player = pcall(target, manager, ...)
+        if ok and player then
+            return player
+        end
+        return nil
+    end
+
+    local player = try_call("local_player", 1)
+        or try_call("local_player_safe", 1)
+        or try_call("local_player")
+        or try_call("local_player_safe")
+    if player then
+        return player
+    end
+
+    local function first_entry(container)
+        if type(container) ~= "table" then
+            return nil
+        end
+        for _, value in pairs(container) do
+            if value then
+                return value
+            end
+        end
+        return nil
+    end
+
+    return first_entry(manager._players) or first_entry(manager._human_players)
+end
+
 local function json_escape(str)
     if not str then
         return ""
@@ -194,7 +236,7 @@ local function listener_pose()
     end
 
     local camera_manager = Managers.state.camera
-    local player = Managers.player and Managers.player:local_player(1)
+    local player = resolve_local_player()
     if not player then
         return nil, nil
     end

@@ -51,6 +51,20 @@ return {
                 decimals_number = 1,
                 tooltip = "miniaudioaddon_distance_scale_desc",
             },
+            {
+                setting_id = "miniaudioaddon_clear_logs",
+                type = "checkbox",
+                default_value = true,
+                title = "miniaudioaddon_clear_logs",
+                tooltip = "miniaudioaddon_clear_logs_desc",
+            },
+            {
+                setting_id = "miniaudioaddon_api_log",
+                type = "checkbox",
+                default_value = false,
+                title = "miniaudioaddon_api_log",
+                tooltip = "miniaudioaddon_api_log_desc",
+            },
         },
     },
 }

@@ -19,6 +19,17 @@ return function(mod, Utils, deps)
         return nil
     end
 
+    local logger = deps.logger
+    local function log(fmt, ...)
+        if not logger then
+            return
+        end
+        local ok, err = pcall(logger, fmt, ...)
+        if not ok and mod and mod.error then
+            mod:error("[MiniAudioAPI] Log failure: %s", tostring(err))
+        end
+    end
+
     local clamp = (Utils and Utils.clamp) or default_clamp
     local now = deps.now or os.clock
     local realtime_now = deps.realtime_now or os.clock
@@ -139,11 +150,14 @@ return function(mod, Utils, deps)
         local id = spec.id or next_track_id()
         local path = spec.path or spec.file or spec.resource
         if not path then
+            log("API.play failed id=%s reason=missing_path", tostring(id))
             return false, "missing_path"
         end
+        log("API.play request id=%s path=%s", tostring(id), tostring(path))
 
         local listener = ensure_listener(spec.listener)
         if spec.require_listener ~= false and not listener then
+            log("API.play failed id=%s reason=listener_unavailable", tostring(id))
             return false, "listener_unavailable"
         end
 
@@ -167,12 +181,13 @@ return function(mod, Utils, deps)
 
         local ok, queued_or_reason = deps.send_play(payload)
         if not ok then
+            log("API.play failed id=%s reason=%s", tostring(id), tostring(queued_or_reason))
             return false, queued_or_reason or "send_failed"
         end
 
         local queued = queued_or_reason and true or false
         local entry = create_or_update_entry(payload, queued and "pending" or "playing")
-        log("play id=%s path=%s queued=%s", tostring(id), tostring(path), tostring(queued))
+        log("API.play success id=%s path=%s queued=%s", tostring(id), tostring(path), tostring(queued))
         return true, entry
     end
 
@@ -188,8 +203,10 @@ return function(mod, Utils, deps)
 
         local entry = tracks[spec.id]
         if not entry then
+            log("API.update failed id=%s reason=unknown_track", tostring(spec.id))
             return false, "unknown_track"
         end
+        log("API.update request id=%s", tostring(spec.id))
 
         local payload = {
             id = spec.id,
@@ -206,6 +223,7 @@ return function(mod, Utils, deps)
 
         local ok, reason = deps.send_update(payload)
         if not ok then
+            log("API.update failed id=%s reason=%s", tostring(spec.id), tostring(reason))
             return false, reason or "send_failed"
         end
 
@@ -219,6 +237,7 @@ return function(mod, Utils, deps)
         end
         touch_entry(entry, "playing")
 
+        log("API.update success id=%s", tostring(spec.id))
         return true, entry
     end
 
@@ -231,13 +250,16 @@ return function(mod, Utils, deps)
             return false, "missing_id"
         end
 
+        log("API.stop request id=%s", tostring(id))
         local ok, reason = deps.send_stop(id, opts and opts.fade)
         if ok then
             touch_entry(tracks[id], "stopping")
             remove_entry(id)
+             log("API.stop success id=%s", tostring(id))
             return true
         end
 
+        log("API.stop failed id=%s reason=%s", tostring(id), tostring(reason))
         return false, reason or "send_failed"
     end
 
@@ -246,6 +268,7 @@ return function(mod, Utils, deps)
         for id in pairs(tracks) do
             targets[#targets + 1] = id
         end
+        log("API.stop_all count=%d", #targets)
         for _, id in ipairs(targets) do
             Api.stop(id, opts)
         end
@@ -267,10 +290,11 @@ return function(mod, Utils, deps)
             had_any = true
         end
 
+        log("API.stop_process process_id=%s had_any=%s", tostring(process_id), tostring(had_any))
         return had_any
     end
 
-    local function simple_control(sender, id, value, state_label)
+    local function simple_control(sender, id, value, state_label, label)
         if not sender then
             return false, "unsupported"
         end
@@ -278,53 +302,61 @@ return function(mod, Utils, deps)
             return false, "missing_id"
         end
 
+        log("API.%s request id=%s value=%s", tostring(label or "control"), tostring(id), tostring(value))
+
         local ok, reason = sender(id, value)
         if ok then
             local entry = tracks[id]
             if entry then
                 touch_entry(entry, state_label)
             end
+            log("API.%s success id=%s", tostring(label or "control"), tostring(id))
             return true
         end
+        log("API.%s failed id=%s reason=%s", tostring(label or "control"), tostring(id), tostring(reason))
         return false, reason or "send_failed"
     end
 
     function Api.pause(id)
-        return simple_control(deps.send_pause, id, nil, "paused")
+        return simple_control(deps.send_pause, id, nil, "paused", "pause")
     end
 
     function Api.resume(id)
-        return simple_control(deps.send_resume, id, nil, "playing")
+        return simple_control(deps.send_resume, id, nil, "playing", "resume")
     end
 
     function Api.seek(id, seconds)
-        return simple_control(deps.send_seek, id, seconds, nil)
+        return simple_control(deps.send_seek, id, seconds, nil, "seek")
     end
 
     function Api.skip(id, seconds)
-        return simple_control(deps.send_skip, id, seconds, nil)
+        return simple_control(deps.send_skip, id, seconds, nil, "skip")
     end
 
     function Api.speed(id, value)
-        return simple_control(deps.send_speed, id, clamp(value or 1.0, 0.125, 4.0), nil)
+        return simple_control(deps.send_speed, id, clamp(value or 1.0, 0.125, 4.0), nil, "speed")
     end
 
     function Api.reverse(id, enabled)
-        return simple_control(deps.send_reverse, id, enabled, nil)
+        return simple_control(deps.send_reverse, id, enabled, nil, "reverse")
     end
 
     function Api.shutdown_daemon()
         if deps.send_shutdown then
+            log("API.shutdown_daemon request")
             local ok, reason = deps.send_shutdown()
             if ok then
+                log("API.shutdown_daemon success")
                 return true
             end
+            log("API.shutdown_daemon failed reason=%s", tostring(reason))
             return false, reason or "send_failed"
         end
         return false, "unsupported"
     end
 
     function Api.remove(id)
+        log("API.remove id=%s", tostring(id))
         remove_entry(id)
     end
 
