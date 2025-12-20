@@ -122,10 +122,70 @@ return {
     elevatormusic_visuals_randomness_desc = {
         en = "Adds a little random hue jitter each frame so the halo glitters like Disco Aquila.",
     },
-    elevatormusic_visuals_radius = {
-        en = "Halo radius (meters)",
+    elevatormusic_visuals_halo_count = {
+        en = "Halos per emitter",
     },
-    elevatormusic_visuals_radius_desc = {
-        en = "Size of the rainbow sphere that marks the emitter.",
+    elevatormusic_visuals_halo_count_desc = {
+        en = "Draw several concentric halos for a denser disco effect.",
+    },
+    elevatormusic_visuals_radius_min = {
+        en = "Minimum halo radius (meters)",
+    },
+    elevatormusic_visuals_radius_min_desc = {
+        en = "Smallest size any halo in the stack can be.",
+    },
+    elevatormusic_visuals_radius_max = {
+        en = "Maximum halo radius (meters)",
+    },
+    elevatormusic_visuals_radius_max_desc = {
+        en = "Largest size any halo in the stack can be.",
+    },
+    elevatormusic_visuals_light_count = {
+        en = "Lights per halo",
+    },
+    elevatormusic_visuals_light_count_desc = {
+        en = "How many animated flashlight beams orbit each halo (higher values cost more performance).",
+    },
+    elevatormusic_visuals_light_orbit_variance = {
+        en = "Light orbit variance",
+    },
+    elevatormusic_visuals_light_orbit_variance_desc = {
+        en = "Adds in/out sway to every light so the paths look like drifting snowflakes instead of perfect circles.",
+    },
+    elevatormusic_visuals_light_vertical_variance = {
+        en = "Light vertical variance",
+    },
+    elevatormusic_visuals_light_vertical_variance_desc = {
+        en = "How far each light bobs up and down while it travels around the halo.",
+    },
+    elevatormusic_visuals_loop_speed = {
+        en = "Light loop speed",
+    },
+    elevatormusic_visuals_loop_speed_desc = {
+        en = "Controls how fast those in/out/vertical motions evolve (set to 0 for static lights).",
+    },
+    elevatormusic_visuals_spin_randomness = {
+        en = "Spin randomness",
+    },
+    elevatormusic_visuals_spin_randomness_desc = {
+        en = "Adds extra variance to each halo's spin speed so they rotate at different rates.",
+    },
+    elevatormusic_visuals_show_core = {
+        en = "Show core sphere",
+    },
+    elevatormusic_visuals_show_core_desc = {
+        en = "Toggle the solid debug orb while keeping the animated halo lights on.",
+    },
+    elevatormusic_visuals_orbit_radius = {
+        en = "Center orbit radius (meters)",
+    },
+    elevatormusic_visuals_orbit_radius_desc = {
+        en = "How far the halo's center drifts around the elevator source.",
+    },
+    elevatormusic_visuals_orbit_speed = {
+        en = "Center orbit speed",
+    },
+    elevatormusic_visuals_orbit_speed_desc = {
+        en = "Speed multiplier for the center drift (set to 0 for a stationary halo).",
     },
 }

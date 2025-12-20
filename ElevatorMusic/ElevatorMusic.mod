@@ -1,4 +1,5 @@
 return {
+    load_after = { "MiniAudioAddon" },
     run = function()
         fassert(rawget(_G, "new_mod"), "`ElevatorMusic` requires the Darktide Mod Framework.")
 

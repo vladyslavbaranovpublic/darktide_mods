@@ -1,3 +1,10 @@
+--[[
+    File: visuals/rainbow.lua
+    Description: ElevatorMusic-exclusive visualizer that draws line-object halos and
+    animated flashlight emitters around each elevator speaker for debugging flair.
+    Overall Release Version: 0.6
+    File Version: 0.5.0
+]]
 local Managers = rawget(_G, "Managers")
 local Vector3 = rawget(_G, "Vector3")
 local Quaternion = rawget(_G, "Quaternion")
@@ -14,6 +21,43 @@ local LIGHT_UNIT = "content/weapons/player/attachments/flashlights/flashlight_01
 local LIGHT_SUPPORT = Unit and Light and Vector3 and Quaternion and World and World.spawn_unit_ex
 local MAX_TILT_RAD = math.rad(70)
 local MAX_TILT_TAN = math.tan(MAX_TILT_RAD)
+
+local ENABLE_LIGHTS = true
+local function safe_line_reset(entry)
+    if not entry or not entry.line_object or not LineObject then
+        return false
+    end
+    local ok = pcall(LineObject.reset, entry.line_object)
+    if not ok then
+        entry.line_object = nil
+        return false
+    end
+    return true
+end
+
+local function safe_line_dispatch(entry)
+    if not entry or not entry.line_object or not entry.world or not LineObject then
+        return false
+    end
+    local ok = pcall(LineObject.dispatch, entry.world, entry.line_object)
+    if not ok then
+        entry.line_object = nil
+        return false
+    end
+    return true
+end
+
+local function safe_line_sphere(entry, color, position, radius)
+    if not entry or not entry.line_object or not LineObject then
+        return false
+    end
+    local ok = pcall(LineObject.add_sphere, entry.line_object, color, position, radius, 32, 24)
+    if not ok then
+        entry.line_object = nil
+        return false
+    end
+    return true
+end
 
 local function hue_to_rgb(h)
     h = h % 1
@@ -57,9 +101,15 @@ local function default_options(options)
         jitter = options.jitter or 0,
         radius = options.radius or 1.0,
         height = options.height or 2.0,
-        light_count = math.max(2, math.floor(options.light_count or 4)),
+        light_count = math.max(2, math.floor(options.light_count or 16)),
         intensity = options.intensity or 40,
         spin_speed = options.spin_speed or 1.5,
+        show_core = options.show_core ~= false,
+        orbit_radius = math.max(0, options.orbit_radius or 0),
+        orbit_speed = options.orbit_speed or 0,
+        light_orbit_variance = math.max(0, options.light_orbit_variance or 0),
+        light_vertical_variance = math.max(0, options.light_vertical_variance or 0),
+        loop_speed = math.max(0, options.loop_speed or 0),
     }
 end
 
@@ -72,7 +122,7 @@ local function apply_light_properties(entry)
         local light = light_data.light
         if light then
             Light.set_enabled(light, true)
-            Light.set_casts_shadows(light, false)
+            Light.set_casts_shadows(light, true)
             Light.set_intensity(light, entry.options.intensity)
             Light.set_spot_angle_start(light, 1 / 180 * math.pi)
             Light.set_spot_angle_end(light, 65 / 180 * math.pi)
@@ -98,7 +148,7 @@ local function destroy_lights(entry)
 end
 
 local function ensure_lights(entry)
-    if not entry or entry.lights or not LIGHT_SUPPORT then
+    if not ENABLE_LIGHTS or not entry or entry.lights or not LIGHT_SUPPORT then
         return
     end
 
@@ -118,8 +168,14 @@ local function ensure_lights(entry)
                 entry.lights[index] = {
                     unit = unit,
                     light = light,
-                    angle = TWO_PI * ((index - 1) / count),
-                    spin = 0,
+                    angle = math.random() * TWO_PI,  -- Random starting angle
+                    spin = math.random() * TWO_PI,   -- Random initial spin
+                    speed_mult = 0.5 + math.random() * 1.5,  -- Circular speed multiplier
+                    radius_mult = 0.7 + math.random() * 0.6, -- Base radius multiplier
+                    height_offset = (math.random() - 0.5) * 0.8, -- Static height offset
+                    radial_phase = math.random() * TWO_PI,
+                    vertical_phase = math.random() * TWO_PI,
+                    loop_speed_mult = 0.5 + math.random() * 1.5,
                 }
             else
                 World.destroy_unit(world, unit)
@@ -128,6 +184,28 @@ local function ensure_lights(entry)
     end
 
     apply_light_properties(entry)
+end
+
+local function update_center_position(entry, dt)
+    if not entry or not entry.base_position then
+        return nil
+    end
+
+    local opts = entry.options or default_options()
+    local radius = opts.orbit_radius or 0
+    local speed = opts.orbit_speed or 0
+    dt = dt or 0
+
+    if radius > 0 and speed ~= 0 and Vector3 then
+        entry.orbit_phase = (entry.orbit_phase or math.random() * TWO_PI) + dt * speed
+        local angle = entry.orbit_phase
+        local offset = Vector3(radius * math.cos(angle), radius * math.sin(angle), 0)
+        entry.position = entry.base_position + offset
+    else
+        entry.position = entry.base_position
+    end
+
+    return entry.position
 end
 
 local function update_light_positions(entry, dt)
@@ -139,11 +217,34 @@ local function update_light_positions(entry, dt)
     local radius = entry.options.radius
     local height = entry.options.height
     local spin_speed = entry.options.spin_speed or 0
+    local orbit_variance = entry.options.light_orbit_variance or 0
+    local vertical_variance = entry.options.light_vertical_variance or 0
+    local loop_speed = entry.options.loop_speed or 0
 
     for _, data in ipairs(entry.lights) do
         if data.unit and Unit.alive and Unit.alive(data.unit) then
-            data.angle = (data.angle + dt * entry.options.speed) % TWO_PI
-            local offset = Vector3(radius * math.cos(data.angle), radius * math.sin(data.angle), height)
+            -- Each light has its own speed and orbit
+            data.angle = (data.angle + dt * entry.options.speed * (data.speed_mult or 1)) % TWO_PI
+            local loop_phase_speed = dt * loop_speed * (data.loop_speed_mult or 1)
+            if loop_speed > 0 then
+                data.radial_phase = ((data.radial_phase or 0) + loop_phase_speed) % TWO_PI
+                data.vertical_phase = ((data.vertical_phase or 0) + loop_phase_speed * 1.2) % TWO_PI
+            end
+
+            local radial_scale = 1
+            if orbit_variance > 0 then
+                local s = math.sin(data.radial_phase or 0)
+                radial_scale = math.max(0.1, 1 + s * orbit_variance)
+            end
+
+            local vertical_offset = data.height_offset or 0
+            if vertical_variance > 0 then
+                vertical_offset = vertical_offset + math.sin(data.vertical_phase or 0) * vertical_variance
+            end
+
+            local light_radius = radius * (data.radius_mult or 1) * radial_scale
+            local light_height = height + vertical_offset
+            local offset = Vector3(light_radius * math.cos(data.angle), light_radius * math.sin(data.angle), light_height)
             local position = center + offset
             Unit.set_local_position(data.unit, 1, position)
 
@@ -213,6 +314,8 @@ function Rainbow.spawn(id, options)
         options = default_options(options),
         phase = math.random(),
         position = nil,
+        base_position = nil,
+        orbit_phase = math.random() * TWO_PI,
     }
     ensure_lights(entry)
     entries[id] = entry
@@ -236,7 +339,10 @@ end
 function Rainbow.set_position(id, position)
     local entry = entries[id]
     if entry then
+        entry.base_position = position
         entry.position = position
+        entry.orbit_phase = entry.orbit_phase or math.random() * TWO_PI
+        update_center_position(entry, 0)
         if entry.lights then
             update_light_positions(entry, 0)
         end
@@ -249,8 +355,8 @@ function Rainbow.remove(id)
         return
     end
     if entry.line_object and entry.world and LineObject then
-        LineObject.reset(entry.line_object)
-        LineObject.dispatch(entry.world, entry.line_object)
+        safe_line_reset(entry)
+        safe_line_dispatch(entry)
     end
     destroy_lights(entry)
     entries[id] = nil
@@ -268,29 +374,41 @@ function Rainbow.update(dt)
     end
 
     for id, entry in pairs(entries) do
-        if not valid_entry(entry) or not entry.position then
+        if not valid_entry(entry) or not entry.base_position then
             Rainbow.remove(id)
         else
             local opts = entry.options or default_options()
+            update_center_position(entry, dt)
+
+            if not entry.position then
+                Rainbow.remove(id)
+                goto continue
+            end
+
             entry.phase = (entry.phase + dt * opts.speed + (math.random() - 0.5) * opts.jitter * dt) % 1
             local r, g, b = hue_to_rgb(entry.phase)
             local color = Color(math.floor(200 + 55 * math.random()), math.floor(r * 255), math.floor(g * 255), math.floor(b * 255))
             local radius = opts.radius or 0.55
 
-            LineObject.reset(entry.line_object)
-            LineObject.add_sphere(entry.line_object, color, entry.position, radius, 32, 24)
-            LineObject.dispatch(entry.world, entry.line_object)
-            ensure_lights(entry)
-            update_light_positions(entry, dt)
+            if not safe_line_reset(entry) then
+                goto continue
+            end
+            if opts.show_core then
+                if not safe_line_sphere(entry, color, entry.position, radius) then
+                    goto continue
+                end
+            end
+            safe_line_dispatch(entry)
+            
+            if ENABLE_LIGHTS then
+                ensure_lights(entry)
+                update_light_positions(entry, dt)
+            elseif entry.lights then
+                destroy_lights(entry)
+            end
         end
+        ::continue::
     end
 end
 
 return Rainbow
---[[
-    File: visuals/rainbow.lua
-    Description: ElevatorMusic-exclusive visualizer that draws line-object halos and
-    animated flashlight emitters around each elevator speaker for debugging flair.
-    Overall Release Version: 0.5
-    File Version: 0.5.0
-]]

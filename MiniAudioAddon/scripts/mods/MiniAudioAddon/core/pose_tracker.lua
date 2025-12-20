@@ -1,3 +1,11 @@
+--[[
+    File: core/pose_tracker.lua
+    Description: Lightweight helper for sampling unit/world poses and converting them
+    into MiniAudio-compatible source payloads for emitters.
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
+]]
+
 local Unit = rawget(_G, "Unit")
 local Vector3 = rawget(_G, "Vector3")
 local Quaternion = rawget(_G, "Quaternion")
@@ -86,7 +94,12 @@ PoseTracker.__index = PoseTracker
 
 function PoseTracker.new(options)
     local tracker = {
-        height_offset = options and options.height_offset or 0,
+        -- Support full 3D offsets with backward compatibility for height_offset
+        offset_x = options and options.x_offset or 0,
+        offset_y = options and options.y_offset or (options and options.height_offset) or 0,
+        offset_z = options and options.z_offset or 0,
+        -- Keep height_offset for legacy code that reads it directly
+        height_offset = options and (options.height_offset or options.y_offset) or 0,
         pose_box = nil,
         rotation_box = nil,
         forward_box = nil,
@@ -107,8 +120,11 @@ local function elevated_position(tracker, anchor)
         return anchor
     end
     local value = anchor
-    if tracker.height_offset and tracker.height_offset ~= 0 then
-        value = anchor + Vector3(0, 0, tracker.height_offset)
+    -- Apply 3D offset if any component is non-zero
+    if (tracker.offset_x and tracker.offset_x ~= 0) or 
+       (tracker.offset_y and tracker.offset_y ~= 0) or 
+       (tracker.offset_z and tracker.offset_z ~= 0) then
+        value = anchor + Vector3(tracker.offset_x or 0, tracker.offset_y or 0, tracker.offset_z or 0)
     end
     return value
 end
@@ -162,10 +178,3 @@ end
 return {
     new = PoseTracker.new,
 }
---[[
-    File: core/pose_tracker.lua
-    Description: Lightweight helper for sampling unit/world poses and converting them
-    into MiniAudio-compatible source payloads for emitters.
-    Overall Release Version: 1.0.1
-    File Version: 1.0.1
-]]
