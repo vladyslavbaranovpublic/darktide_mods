@@ -186,6 +186,7 @@ local function scan_playlist(state, force)
     end
 
     state.playlist = {}
+    state.durations = {}
     state.last_scan_t = now
     state.next_index = 1
 
@@ -200,6 +201,12 @@ local function scan_playlist(state, force)
                     candidate = IOUtils.expand_track_path(candidate) or candidate
                 end
                 state.playlist[#state.playlist + 1] = candidate
+                if IOUtils and IOUtils.get_media_duration then
+                    local duration = IOUtils.get_media_duration(candidate)
+                    if duration and duration > 0 then
+                        state.durations[candidate] = duration
+                    end
+                end
             elseif state.unsupported_extensions[ext] then
                 skipped[ext] = (skipped[ext] or 0) + 1
             end
@@ -267,9 +274,18 @@ function PlaylistManager.register(source_id, config)
         next_index = 1,
         warned_files = false,
         warned_missing = false,
+        durations = {},
     }
 
     return true
+end
+
+function PlaylistManager.duration(source_id, path)
+    local state = sources[source_id]
+    if not state or not path then
+        return nil
+    end
+    return state.durations[path]
 end
 
 function PlaylistManager.force_scan(source_id)

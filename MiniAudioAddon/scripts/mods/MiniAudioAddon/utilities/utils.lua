@@ -117,11 +117,56 @@ local function json_escape(str)
         return ""
     end
 
-    return (tostring(str)
-        :gsub("\\", "\\\\")
-        :gsub("\"", "\\\"")
-        :gsub("\n", "\\n")
-        :gsub("\r", "\\r"))
+    local value = tostring(str)
+    local buffer = {}
+
+    for i = 1, #value do
+        local byte = string.byte(value, i)
+        if not byte then
+            break
+        end
+        if byte == 34 then -- "
+            buffer[#buffer + 1] = "\\\""
+        elseif byte == 92 then -- \
+            buffer[#buffer + 1] = "\\\\"
+        elseif byte == 8 then -- \b
+            buffer[#buffer + 1] = "\\b"
+        elseif byte == 12 then -- \f
+            buffer[#buffer + 1] = "\\f"
+        elseif byte == 10 then -- \n
+            buffer[#buffer + 1] = "\\n"
+        elseif byte == 13 then -- \r
+            buffer[#buffer + 1] = "\\r"
+        elseif byte == 9 then -- \t
+            buffer[#buffer + 1] = "\\t"
+        elseif byte < 32 or byte > 126 then
+            buffer[#buffer + 1] = string.format("\\u%04X", byte)
+        else
+            buffer[#buffer + 1] = string.char(byte)
+        end
+    end
+
+    return table.concat(buffer)
+end
+
+function Utils.console_safe(text)
+    if text == nil then
+        return ""
+    end
+    local value = tostring(text)
+    local buffer = {}
+    for i = 1, #value do
+        local byte = string.byte(value, i)
+        if not byte then
+            break
+        end
+        if byte < 32 or byte > 126 then
+            buffer[#buffer + 1] = string.format("\\x%02X", byte)
+        else
+            buffer[#buffer + 1] = string.char(byte)
+        end
+    end
+    return table.concat(buffer)
 end
 
 local function simple_json_encode(value)
@@ -299,8 +344,8 @@ function Utils.listener_pose()
         return nil, nil
     end
 
-    local pose = camera_manager:listener_pose(viewport_name)
-    if not pose then
+    local ok_pose, pose = pcall(camera_manager.listener_pose, camera_manager, viewport_name)
+    if not ok_pose or not pose then
         return nil, nil
     end
 

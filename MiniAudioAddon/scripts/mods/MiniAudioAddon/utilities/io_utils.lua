@@ -8,6 +8,17 @@
 local IOUtils = {}
 
 local Mods = rawget(_G, "Mods")
+local ascii_proxy_cache = {}
+local Shell_ref = nil
+local Utils_ref = nil
+local MEDIA_DURATION_CACHE = {}
+
+local function sanitize_ps_single(value)
+    if Utils_ref and Utils_ref.sanitize_for_ps_single then
+        return Utils_ref.sanitize_for_ps_single(value)
+    end
+    return tostring(value or ""):gsub("'", "''")
+end
 
 function IOUtils.append_text_file(path, contents)
     if not path or not contents then
@@ -69,6 +80,124 @@ function IOUtils.delete_file(path)
     return result ~= nil
 end
 
+local function copy_using_io_path(source_path, destination)
+    local io_api = (Mods and Mods.lua and Mods.lua.io) or io
+    if not io_api or type(io_api.open) ~= "function" then
+        return false
+    end
+
+    local read_ok, reader = pcall(io_api.open, source_path, "rb")
+    if not read_ok or not reader then
+        return false
+    end
+
+    local data = reader:read("*a")
+    reader:close()
+    if not data then
+        return false
+    end
+
+    local write_ok, writer = pcall(io_api.open, destination, "wb")
+    if not write_ok or not writer then
+        return false
+    end
+    writer:write(data)
+    writer:close()
+    return true
+end
+
+local function enumerate_dir_short_names(directory)
+    if not directory or directory == "" then
+        return nil
+    end
+
+    local popen_factory = Utils_ref and Utils_ref.locate_popen and Utils_ref.locate_popen()
+    if not popen_factory then
+        if io and io.popen then
+            popen_factory = function(cmd) return io.popen(cmd, "r") end
+        else
+            return nil
+        end
+    end
+
+    local command = string.format('cmd /S /C "dir /a-d /x \\"%s\\""', directory)
+    local pipe = popen_factory(command)
+    return pipe
+end
+
+local function short_path_for(path)
+    local directory = IOUtils.directory_of(path)
+    local filename = path and path:match("([^/\\]+)$")
+    if not directory or not filename then
+        return nil
+    end
+
+    local pipe = enumerate_dir_short_names(directory)
+    if not pipe then
+        return nil
+    end
+
+    local request_name = filename and filename:lower() or nil
+    for line in pipe:lines() do
+        local short, long = line:match("^[^%s]+%s+[^%s]+%s+[^%s]+%s+([^%s]*)%s+(.+)$")
+        if short and long then
+            long = long:gsub("^%s+", "")
+            if long == filename and short ~= "" then
+                pipe:close()
+                return IOUtils.ensure_trailing_separator(directory) .. short
+            end
+            if request_name and long:lower() == request_name and short ~= "" then
+                pipe:close()
+                return IOUtils.ensure_trailing_separator(directory) .. short
+            end
+        end
+    end
+    pipe:close()
+    return nil
+end
+
+function IOUtils.copy_file(source, destination)
+    if not source or not destination then
+        return false
+    end
+
+    if copy_using_io_path(source, destination) then
+        return true
+    end
+
+    local short_source = short_path_for(source)
+    if short_source and short_source ~= source and copy_using_io_path(short_source, destination) then
+        return true
+    end
+
+    if Shell_ref and Shell_ref.run_command then
+        local function sanitize_ps(value)
+            if Utils_ref and Utils_ref.sanitize_for_ps_single then
+                return Utils_ref.sanitize_for_ps_single(value)
+            end
+            value = tostring(value or ""):gsub("'", "''")
+            return value
+        end
+
+        local source_arg = short_source or source
+        local command = string.format(
+            [[powershell -NoLogo -NoProfile -Command "& { Copy-Item -LiteralPath '%s' -Destination '%s' -Force }"]],
+            sanitize_ps(source_arg),
+            sanitize_ps(destination)
+        )
+
+        if Shell_ref.run_command(command, "copy_file_proxy", { prefer_local = true }) then
+            return true
+        end
+    end
+
+    if mod_ref and mod_ref.error then
+        mod_ref:error("[MiniAudioAddon] Failed to copy %s -> %s", tostring(source), tostring(destination))
+    end
+
+    return false
+end
+
 function IOUtils.add_trailing_slash(path)
     if not path or path == "" then
         return path
@@ -102,6 +231,8 @@ local DLS_ref = nil
 function IOUtils.init(dependencies)
     mod_ref = dependencies.mod
     DLS_ref = dependencies.DLS
+    Shell_ref = dependencies.Shell
+    Utils_ref = dependencies.Utils
 end
 
 --[[
@@ -178,18 +309,100 @@ end
         candidates: Array of path strings to check
     Returns: First existing path or nil
 ]]
-function IOUtils.prefer_existing_path(candidates)
-    for _, candidate in ipairs(candidates) do
-        if IOUtils.file_exists(candidate) then
-            return candidate
+local function resolve_existing_path(candidate)
+    if not candidate or candidate == "" then
+        return nil
+    end
+    local path = IOUtils.sanitize_path(candidate)
+    if not path then
+        return nil
+    end
+    if IOUtils.file_exists(path) then
+        return path
+    end
+    if IOUtils.is_absolute_path(path) then
+        local short = short_path_for(path)
+        if short and IOUtils.file_exists(short) then
+            return short
         end
     end
     return nil
 end
 
+function IOUtils.prefer_existing_path(candidates)
+    for _, candidate in ipairs(candidates) do
+        local resolved = resolve_existing_path(candidate)
+        if resolved then
+            return resolved
+        end
+    end
+    return nil
+end
+
+function IOUtils.resolve_existing_path(path)
+    return resolve_existing_path(path)
+end
+
+function IOUtils.resolve_short_path(path)
+    return short_path_for(path)
+end
+
+local function fetch_media_duration(path)
+    local popen_factory = Utils_ref and Utils_ref.locate_popen and Utils_ref.locate_popen()
+    if not popen_factory then
+        return nil
+    end
+    local directory = IOUtils.directory_of(path)
+    local filename = path and path:match("([^/\\]+)$")
+    if not directory or not filename then
+        return nil
+    end
+
+    local command = string.format(
+        [[powershell -NoLogo -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $folder='%s'; $file='%s'; $shell = New-Object -ComObject Shell.Application; $dir = $shell.Namespace($folder); if ($dir -eq $null) { return }; $item = $dir.ParseName($file); if ($item -eq $null) { return }; $ticks = $item.ExtendedProperty('System.Media.Duration'); if ($ticks) { $seconds = [math]::Round($ticks / 10000000, 3); Write-Output $seconds }"]],
+        sanitize_ps_single(directory),
+        sanitize_ps_single(filename)
+    )
+
+    local pipe = popen_factory(command)
+    if not pipe then
+        return nil
+    end
+    local output = pipe:read("*a")
+    pipe:close()
+    if not output then
+        return nil
+    end
+    local trimmed = output:gsub("^%s+", ""):gsub("%s+$", "")
+    local duration = tonumber(trimmed)
+    return duration
+end
+
+function IOUtils.get_media_duration(path)
+    if not path then
+        return nil
+    end
+    local cached = MEDIA_DURATION_CACHE[path]
+    if cached ~= nil then
+        if cached == false then
+            return nil
+        end
+        return cached
+    end
+
+    local duration = fetch_media_duration(path)
+    if duration and duration > 0 then
+        MEDIA_DURATION_CACHE[path] = duration
+        return duration
+    end
+
+    MEDIA_DURATION_CACHE[path] = false
+    return nil
+end
+
 --[[
     Return first existing path or last non-empty candidate as fallback
-    
+
     Args:
         candidates: Array of path strings to check
     Returns: First existing path or last non-empty candidate
@@ -427,7 +640,7 @@ function IOUtils.expand_track_path(path)
     end
 
     if IOUtils.is_absolute_path(sanitized) then
-        return IOUtils.file_exists(sanitized) and sanitized or nil
+        return resolve_existing_path(sanitized)
     end
 
     local candidates = {}
@@ -630,6 +843,80 @@ function IOUtils.reset_cache()
     MOD_BASE_PATH = nil
     MOD_FILESYSTEM_PATH = nil
     MOD_AUDIO_FOLDER_CACHE = {}
+end
+
+local function needs_ascii_proxy(path)
+    return path and path:find("[\128-\255]")
+end
+
+local function sanitize_filename(name)
+    if not name or name == "" then
+        return "track"
+    end
+    local sanitized = name:gsub("[^%w%._%-]", "_")
+    if sanitized == "" then
+        sanitized = "track"
+    end
+    return sanitized
+end
+
+local function ascii_proxy_directory()
+    if ascii_proxy_cache.__dir then
+        return ascii_proxy_cache.__dir
+    end
+    local base = IOUtils.get_mod_filesystem_path()
+    if not base then
+        return nil
+    end
+    local dir = IOUtils.ensure_trailing_separator(base) .. "Audio"
+    ascii_proxy_cache.__dir = dir
+    return dir
+end
+
+local function simple_hash(str)
+    local hash = 5381
+    for i = 1, #str do
+        local byte = string.byte(str, i)
+        hash = (hash * 33 + (byte or 0)) % 0x100000000
+    end
+    return hash
+end
+
+function IOUtils.ensure_ascii_proxy(path)
+    if not needs_ascii_proxy(path) then
+        return path
+    end
+
+    if ascii_proxy_cache[path] and IOUtils.file_exists(ascii_proxy_cache[path]) then
+        return ascii_proxy_cache[path]
+    end
+
+    local proxy_dir = ascii_proxy_directory()
+    if not proxy_dir then
+        return path
+    end
+
+    local filename = path:match("([^/\\]+)$") or "track"
+    local ext = filename:match("(%.%w+)$") or ""
+    local basename = filename:sub(1, #filename - #ext)
+    if basename == "" then
+        basename = filename
+        ext = ""
+    end
+    basename = sanitize_filename(basename)
+    local hash = simple_hash(path)
+    local proxy_name = string.format("proxy_%s_%08x%s", basename, hash, ext)
+    local proxy_path = IOUtils.ensure_trailing_separator(proxy_dir) .. proxy_name
+
+    if not IOUtils.file_exists(proxy_path) then
+        local copied = IOUtils.copy_file(path, proxy_path)
+        if not copied then
+            return path
+        end
+    end
+
+    ascii_proxy_cache[path] = proxy_path
+    return proxy_path
 end
 
 return IOUtils

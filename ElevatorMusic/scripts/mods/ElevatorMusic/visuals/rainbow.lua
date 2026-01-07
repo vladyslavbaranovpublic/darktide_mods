@@ -23,8 +23,84 @@ local MAX_TILT_RAD = math.rad(70)
 local MAX_TILT_TAN = math.tan(MAX_TILT_RAD)
 
 local ENABLE_LIGHTS = true
+local function zero_vector()
+    return Vector3 and Vector3(0, 0, 0) or nil
+end
+
+local function vector_components(vec)
+    if not vec then
+        return 0, 0, 0
+    end
+    if Vector3 and Vector3.x then
+        return Vector3.x(vec), Vector3.y(vec), Vector3.z(vec)
+    end
+    if type(vec) == "table" then
+        return vec[1] or 0, vec[2] or 0, vec[3] or 0
+    end
+    return 0, 0, 0
+end
+
+local function vector_clone(vec)
+    if not Vector3 or not vec then
+        return nil
+    end
+    local x, y, z = vector_components(vec)
+    return Vector3(x, y, z)
+end
+
+local function vector_add(a, b)
+    if not Vector3 then
+        return nil
+    end
+    if not a and not b then
+        return nil
+    end
+    if not a then
+        return vector_clone(b)
+    end
+    if not b then
+        return vector_clone(a)
+    end
+    local ax, ay, az = vector_components(a)
+    local bx, by, bz = vector_components(b)
+    return Vector3(ax + bx, ay + by, az + bz)
+end
+
+local function vector_scale(vec, scalar)
+    if not Vector3 or not vec then
+        return nil
+    end
+    local x, y, z = vector_components(vec)
+    return Vector3(x * scalar, y * scalar, z * scalar)
+end
+
+local function vector_from_z(z)
+    if not Vector3 then
+        return nil
+    end
+    return Vector3(0, 0, z or 0)
+end
+
+local function random_between(min_value, max_value)
+    if not max_value or max_value <= min_value then
+        return min_value
+    end
+    return min_value + math.random() * (max_value - min_value)
+end
+
+local function world_handle()
+    if not Managers or not Managers.world then
+        return nil
+    end
+    return Managers.world:world("level_world")
+end
 local function safe_line_reset(entry)
-    if not entry or not entry.line_object or not LineObject then
+    if not entry or not entry.line_object or not LineObject or type(LineObject.reset) ~= "function" then
+        return false
+    end
+    if not entry.world or entry.world ~= world_handle() then
+        entry.line_object = nil
+        entry.world = nil
         return false
     end
     local ok = pcall(LineObject.reset, entry.line_object)
@@ -36,7 +112,7 @@ local function safe_line_reset(entry)
 end
 
 local function safe_line_dispatch(entry)
-    if not entry or not entry.line_object or not entry.world or not LineObject then
+    if not entry or not entry.line_object or not entry.world or not LineObject or type(LineObject.dispatch) ~= "function" then
         return false
     end
     local ok = pcall(LineObject.dispatch, entry.world, entry.line_object)
@@ -48,7 +124,7 @@ local function safe_line_dispatch(entry)
 end
 
 local function safe_line_sphere(entry, color, position, radius)
-    if not entry or not entry.line_object or not LineObject then
+    if not entry or not entry.line_object or not LineObject or type(LineObject.add_sphere) ~= "function" then
         return false
     end
     local ok = pcall(LineObject.add_sphere, entry.line_object, color, position, radius, 32, 24)
@@ -83,13 +159,6 @@ local function hue_to_rgb(h)
     return r, g, b
 end
 
-local function world_handle()
-    if not Managers or not Managers.world then
-        return nil
-    end
-    return Managers.world:world("level_world")
-end
-
 local function valid_entry(entry)
     return entry and entry.world and entry.line_object
 end
@@ -110,6 +179,15 @@ local function default_options(options)
         light_orbit_variance = math.max(0, options.light_orbit_variance or 0),
         light_vertical_variance = math.max(0, options.light_vertical_variance or 0),
         loop_speed = math.max(0, options.loop_speed or 0),
+        scatter = options.scatter or false,
+        scatter_count = math.max(0, math.floor(options.scatter_count or 0)),
+        scatter_distance = math.max(0, options.scatter_distance or 0),
+        scatter_speed = math.max(0, options.scatter_speed or 0),
+        scatter_hover = math.max(0, options.scatter_hover or 0),
+        scatter_size_min = math.max(0.01, options.scatter_size_min or 0.08),
+        scatter_size_max = math.max(0.01, options.scatter_size_max or options.scatter_size_min or 0.08),
+        scatter_sway = math.max(0, options.scatter_sway or 0),
+        scatter_vertical_offset = options.scatter_vertical_offset or 0,
     }
 end
 
@@ -149,6 +227,9 @@ end
 
 local function ensure_lights(entry)
     if not ENABLE_LIGHTS or not entry or entry.lights or not LIGHT_SUPPORT then
+        return
+    end
+    if entry.options and entry.options.scatter then
         return
     end
 
@@ -287,6 +368,61 @@ local function update_light_positions(entry, dt)
     end
 end
 
+local function ensure_scatter_offset(entry)
+    if not entry or not entry.options or not entry.options.scatter then
+        entry.scatter_offset = nil
+        entry.scatter_axis_a = nil
+        entry.scatter_axis_b = nil
+        entry.scatter_seed_distance = nil
+        return
+    end
+    local distance = entry.options.scatter_distance or 0
+    if not Vector3 then
+        entry.scatter_offset = zero_vector()
+        return
+    end
+    if not entry.scatter_offset or entry.scatter_seed_distance ~= distance then
+        entry.scatter_seed_distance = distance
+        local radius = distance * math.sqrt(math.random())
+        local angle = math.random() * TWO_PI
+        entry.scatter_offset = Vector3(radius * math.cos(angle), radius * math.sin(angle), 0)
+    end
+    if not entry.scatter_axis_a then
+        local axis_angle = math.random() * TWO_PI
+        entry.scatter_axis_a = Vector3(math.cos(axis_angle), math.sin(axis_angle), 0)
+        entry.scatter_axis_b = Vector3(-math.sin(axis_angle), math.cos(axis_angle), 0)
+    end
+end
+
+local function update_scatter_position(entry, dt)
+    if not entry or not entry.options or not entry.options.scatter or not entry.base_position then
+        return
+    end
+    ensure_scatter_offset(entry)
+    entry.scatter_phase = (entry.scatter_phase or math.random() * TWO_PI) + dt * (entry.options.scatter_speed or 0)
+    local position = vector_clone(entry.base_position) or entry.base_position or zero_vector()
+    if entry.options.scatter_vertical_offset and entry.options.scatter_vertical_offset ~= 0 then
+        position = vector_add(position, vector_from_z(entry.options.scatter_vertical_offset))
+    end
+    if entry.scatter_offset then
+        position = vector_add(position, entry.scatter_offset)
+    end
+    local sway = entry.options.scatter_sway or 0
+    if sway > 0 and entry.scatter_axis_a then
+        local sway_vector = vector_scale(entry.scatter_axis_a, math.sin(entry.scatter_phase * 0.9) * sway)
+        if entry.scatter_axis_b then
+            sway_vector = vector_add(sway_vector, vector_scale(entry.scatter_axis_b, math.cos(entry.scatter_phase * 1.3) * sway * 0.6))
+        end
+        if sway_vector then
+            position = vector_add(position, sway_vector)
+        end
+    end
+    if entry.options.scatter_hover and entry.options.scatter_hover > 0 then
+        position = vector_add(position, vector_from_z(math.sin(entry.scatter_phase) * entry.options.scatter_hover))
+    end
+    entry.position = position
+end
+
 function Rainbow.spawn(id, options)
     if not id then
         return
@@ -316,6 +452,11 @@ function Rainbow.spawn(id, options)
         position = nil,
         base_position = nil,
         orbit_phase = math.random() * TWO_PI,
+        scatter_offset = nil,
+        scatter_axis_a = nil,
+        scatter_axis_b = nil,
+        scatter_seed_distance = nil,
+        scatter_phase = math.random() * TWO_PI,
     }
     ensure_lights(entry)
     entries[id] = entry
@@ -327,6 +468,16 @@ function Rainbow.configure(id, options)
     if entry then
         local previous = entry.options
         entry.options = default_options(options or entry.options)
+        if not entry.options.scatter then
+            entry.scatter_offset = nil
+            entry.scatter_axis_a = nil
+            entry.scatter_axis_b = nil
+            entry.scatter_seed_distance = nil
+        elseif not previous
+            or previous.scatter_distance ~= entry.options.scatter_distance then
+            entry.scatter_offset = nil
+            entry.scatter_seed_distance = nil
+        end
         if not entry.lights or not previous or previous.light_count ~= entry.options.light_count then
             destroy_lights(entry)
             ensure_lights(entry)
@@ -342,7 +493,11 @@ function Rainbow.set_position(id, position)
         entry.base_position = position
         entry.position = position
         entry.orbit_phase = entry.orbit_phase or math.random() * TWO_PI
-        update_center_position(entry, 0)
+        if entry.options and entry.options.scatter then
+            update_scatter_position(entry, 0)
+        else
+            update_center_position(entry, 0)
+        end
         if entry.lights then
             update_light_positions(entry, 0)
         end
@@ -378,11 +533,10 @@ function Rainbow.update(dt)
             Rainbow.remove(id)
         else
             local opts = entry.options or default_options()
-            update_center_position(entry, dt)
-
-            if not entry.position then
-                Rainbow.remove(id)
-                goto continue
+            if opts.scatter then
+                update_scatter_position(entry, dt)
+            else
+                update_center_position(entry, dt)
             end
 
             entry.phase = (entry.phase + dt * opts.speed + (math.random() - 0.5) * opts.jitter * dt) % 1
@@ -393,14 +547,18 @@ function Rainbow.update(dt)
             if not safe_line_reset(entry) then
                 goto continue
             end
-            if opts.show_core then
+            if not entry.position then
+                Rainbow.remove(id)
+                goto continue
+            end
+            if opts.scatter or opts.show_core then
                 if not safe_line_sphere(entry, color, entry.position, radius) then
                     goto continue
                 end
             end
             safe_line_dispatch(entry)
-            
-            if ENABLE_LIGHTS then
+
+            if ENABLE_LIGHTS and not opts.scatter then
                 ensure_lights(entry)
                 update_light_positions(entry, dt)
             elseif entry.lights then

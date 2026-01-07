@@ -16,6 +16,8 @@ local IOUtils = nil
 local Unit = rawget(_G, "Unit")
 local Vector3 = rawget(_G, "Vector3")
 local Vector3Box = rawget(_G, "Vector3Box")
+local PHYSICAL_MOTION_EPSILON = 0.01
+local PHYSICAL_MOTION_MEMORY = 0.35
 
 local function finite(value, default)
     if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
@@ -39,6 +41,57 @@ local function clone_vector(vec)
         return vec
     end
     return Vector3(Vector3.x(vec), Vector3.y(vec), Vector3.z(vec))
+end
+
+local function realtime_now()
+    if Utils and Utils.realtime_now then
+        return Utils.realtime_now()
+    end
+    return os.clock()
+end
+
+local function safe_console_text(text)
+    if Utils and Utils.console_safe then
+        return Utils.console_safe(text)
+    end
+    if text == nil then
+        return ""
+    end
+    return tostring(text)
+end
+
+local function clear_restart(entry)
+    if not entry then
+        return
+    end
+    entry.restart_mode = nil
+    entry.restart_distance = nil
+    entry.restart_time = nil
+end
+
+local function queue_restart(entry, mode, distance)
+    if not entry then
+        return
+    end
+    entry.restart_mode = mode
+    entry.restart_distance = distance
+    entry.restart_time = realtime_now()
+end
+
+function PlatformController:_platform_distance(entry, listener_position)
+    if not entry then
+        return nil
+    end
+    if listener_position and entry.unit and Unit and Unit.world_position and Unit.alive and Unit.alive(entry.unit) and Vector3 and Vector3.distance then
+        local ok, pos = pcall(Unit.world_position, entry.unit, 1)
+        if ok and pos then
+            local okd, dist = pcall(Vector3.distance, pos, listener_position)
+            if okd then
+                return dist
+            end
+        end
+    end
+    return entry.last_distance
 end
 
 function PlatformController.init(dependencies)
@@ -67,17 +120,28 @@ function PlatformController.new(config)
         idle_full_setting = config.idle_full_setting,
         idle_radius_setting = config.idle_radius_setting,
         idle_after_activation_setting = config.idle_after_activation_setting,
-        idle_enabled_setting = config.idle_enabled_setting,
         play_activation_setting = config.play_activation_setting,
+        activation_only_setting = config.activation_only_setting,
+        reshuffle_setting = config.reshuffle_setting,
         sphere_color = config.sphere_color or {255, 220, 80},
         debug_setting = config.debug_setting or "elevatormusic_debug",
+        process_id = string.format("%s_platform", config.identifier or config.mod:get_name()),
         state = {
             platforms = {},
             sequence = 0,
+            suppress_new_emitters = false,
         },
     }, PlatformController)
 
+    controller:_stop_process_tracks("boot")
+
     return controller
+end
+
+function PlatformController:_stop_process_tracks(reason)
+    if MiniAudioMod and MiniAudioMod.api and MiniAudioMod.api.stop_process and self.process_id then
+        pcall(MiniAudioMod.api.stop_process, self.process_id, { reason = reason, fade = 0 })
+    end
 end
 
 function PlatformController:_set_client_active(active)
@@ -222,16 +286,83 @@ function PlatformController:_pick_track()
     return track
 end
 
-function PlatformController:_start_emitter(entry, mode, distance)
-    if not self.get_setting("elevatormusic_enable") then
+function PlatformController:_playable_audio_path(path)
+    if IOUtils and IOUtils.ensure_ascii_proxy then
+        return IOUtils.ensure_ascii_proxy(path)
+    end
+    return path
+end
+
+function PlatformController:_on_emitter_finished(entry, mode, reason)
+    if not entry or self.state.platforms[entry.key] ~= entry then
         return
+    end
+    local natural_finish = reason == "daemon"
+    entry.emitter = nil
+    self:_toggle_marker(entry, nil, true)
+    self:_set_client_active(false)
+    entry.pending_stop = false
+    if not natural_finish then
+        return
+    end
+
+    if not self:_reshuffle_enabled() then
+        return
+    end
+    local direction_moving = entry.direction ~= "none"
+    local can_activation = (entry.moving or direction_moving) and self:_activation_enabled()
+    if can_activation then
+        local started = self:_start_emitter(entry, "activation", entry.last_distance)
+        if not started then
+            queue_restart(entry, "activation", entry.last_distance)
+        end
+        return
+    end
+
+    if self:_activation_only() then
+        return
+    end
+
+    local radius = select(1, self:_idle_settings())
+    if entry.last_distance and entry.last_distance <= radius then
+        local started = self:_start_emitter(entry, "idle", entry.last_distance)
+        if not started then
+            queue_restart(entry, "idle", entry.last_distance)
+        end
+    end
+end
+
+function PlatformController:_start_emitter(entry, mode, distance, forced_path)
+    if self.state.suppress_new_emitters then
+        return false
+    end
+    if entry and entry.pending_stop then
+        return false
+    end
+    if mode == "idle" and self:_activation_only() then
+        if entry and entry.emitter and entry.emitter.mode == "idle" then
+            self:_stop_emitter(entry, "activation_only")
+        end
+        return false
+    end
+    if not self.get_setting("elevatormusic_enable") then
+        return false
     end
     if not EmitterManager then
-        return
+        return false
     end
-    local path = self:_pick_track()
+    local idle_radius_setting, _, idle_full_setting = self:_idle_settings()
+    local scaled_idle_radius = self:_scaled_distance(idle_radius_setting)
+    if mode == "activation" and distance and scaled_idle_radius and distance > (scaled_idle_radius * 3.2) then
+        return false
+    end
+    local path = forced_path or self:_pick_track()
     if not path then
-        return
+        return false
+    end
+    local playable_path = self:_playable_audio_path(path)
+    if not playable_path then
+        return false
     end
 
     if self.get_setting and self.get_setting(self.debug_setting) then
@@ -242,25 +373,31 @@ function PlatformController:_start_emitter(entry, mode, distance)
         if volume then
             vol_num = volume
         end
-        self.mod:echo("%s path=%s distance=%.2f volume=%.2f", prefix, tostring(path), dist_num, vol_num)
+        self.mod:echo("%s path=%s distance=%.2f volume=%.2f", prefix, safe_console_text(path), dist_num, vol_num)
         if position then
             local x = position.x or position[1] or 0
             local y = position.y or position[2] or 0
             local z = position.z or position[3] or 0
             self.mod:echo("%s position=(%.1f, %.1f, %.1f)", prefix, x, y, z)
         end
+        if playable_path ~= path then
+            self.mod:echo("%s proxy=%s", prefix, safe_console_text(playable_path))
+        end
     end
-    local radius, _, full = self:_idle_settings()
+    local radius = idle_radius_setting
+    local full = idle_full_setting
     local volume = self:_volume_for_mode(mode, distance, radius, full)
     self.state.sequence = self.state.sequence + 1
     local emitter_id = string.format("%s_%s_%d", self.identifier, tostring(entry.key), self.state.sequence)
+    local loop_track = (forced_path ~= nil) or (not self:_reshuffle_enabled())
     local config = {
         id = emitter_id,
-        audio_path = path,
+        audio_path = playable_path,
         profile = self:_build_profile(mode, radius, full),
         volume = volume,
-        loop = true,
+        loop = loop_track,
         require_listener = true,
+        process_id = self.process_id,
         provider_context = entry,
         position_provider = function(context)
             local unit = context and context.unit
@@ -285,40 +422,73 @@ function PlatformController:_start_emitter(entry, mode, distance)
             }
         end,
         provider_grace = 1.5,
+        on_finished = function(_, reason)
+            self:_on_emitter_finished(entry, mode, reason)
+        end,
     }
     local created, create_err = EmitterManager.create(config)
     if not created then
         if self.mod and self.get_setting and self.get_setting(self.debug_setting) then
             self.mod:echo("[ElevatorMusic] Failed to create emitter (%s): %s", mode, tostring(create_err or "unknown error"))
         end
-        return
+        return false
     end
     entry.emitter = {
         id = created,
         mode = mode,
-        path = path,
+        path = playable_path,
+        original_path = path,
         current_volume = volume,
         current_profile = config.profile,
         linger_until = nil,
         linger_total = nil,
         next_update = 0,
     }
+    if loop_track then
+        entry.emitter.expected_end = nil
+    else
+        local track_duration = PlaylistManager and PlaylistManager.duration and PlaylistManager.duration(self.playlist_id, path)
+        if track_duration and track_duration > 0 then
+            entry.emitter.expected_end = Utils.realtime_now() + track_duration
+        else
+            entry.emitter.expected_end = nil
+        end
+    end
+    entry.last_track_path = path
     self:_set_client_active(true)
+    clear_restart(entry)
+    return true
 end
 
-function PlatformController:_stop_emitter(entry, reason)
-    if not EmitterManager or not entry or not entry.emitter then
+function PlatformController:_stop_emitter(entry, reason, immediate)
+    if not entry then
         return
     end
-    local fade = Utils and Utils.clamp and Utils.clamp(finite(self.get_setting(self.fade_setting) or 1.5, 1.5), 0, 10) or 0
-    EmitterManager.stop(entry.emitter.id, fade)
+    if entry.pending_stop then
+        return
+    end
+    if not EmitterManager or not entry.emitter then
+        return
+    end
+    entry.pending_stop = true
+    local fade = 0
+    if not immediate then
+        fade = Utils and Utils.clamp and Utils.clamp(finite(self.get_setting(self.fade_setting) or 1.5, 1.5), 0, 10) or 0
+    end
+    local emitter_id = entry.emitter.id
     entry.emitter = nil
+    clear_restart(entry)
     self:_toggle_marker(entry, nil, true)
     self:_set_client_active(false)
+    local stopped = EmitterManager.stop(emitter_id, fade)
+    entry.pending_stop = false
+    if not stopped then
+        return
+    end
 end
 
 function PlatformController:_idle_allowed(distance)
-    if not self.get_setting(self.idle_enabled_setting) then
+    if self:_activation_only() then
         return false
     end
     if not distance then
@@ -328,9 +498,87 @@ function PlatformController:_idle_allowed(distance)
     return distance <= radius
 end
 
+function PlatformController:_reshuffle_enabled()
+    if not self.reshuffle_setting then
+        return false
+    end
+    return self.get_setting(self.reshuffle_setting) and true or false
+end
+
+function PlatformController:_activation_only()
+    if not self.activation_only_setting then
+        return false
+    end
+    return self.get_setting(self.activation_only_setting) and true or false
+end
+
+function PlatformController:_activation_enabled()
+    if not self.play_activation_setting then
+        return true
+    end
+    local value = self.get_setting(self.play_activation_setting)
+    if value == nil then
+        return true
+    end
+    return value
+end
+
+function PlatformController:_apply_activation_linger(entry)
+    if not entry or not entry.emitter or entry.emitter.mode ~= "activation" then
+        return
+    end
+    entry.emitter.linger_total = nil
+    entry.emitter.linger_until = nil
+    if not self:_activation_only() then
+        return
+    end
+    local linger = Utils and Utils.clamp and Utils.clamp(finite(self.get_setting(self.activation_linger_setting) or 0, 0), 0, 60) or 0
+    if linger > 0 then
+        entry.emitter.linger_total = linger
+        entry.emitter.linger_until = realtime_now() + linger
+    end
+end
+
+function PlatformController:_attempt_restart(entry, distance)
+    if not entry or entry.emitter or not entry.restart_mode then
+        return
+    end
+    if entry.pending_stop then
+        return
+    end
+    local mode = entry.restart_mode
+    if mode == "activation" then
+        if entry.moving and self:_activation_enabled() then
+            local dist = distance or entry.restart_distance
+            if self:_start_emitter(entry, "activation", dist) then
+                clear_restart(entry)
+            end
+        end
+        return
+    end
+    if mode == "idle" then
+        if self:_activation_only() then
+            clear_restart(entry)
+            return
+        end
+        local radius = select(1, self:_idle_settings())
+        local dist = distance or entry.restart_distance
+        if dist and dist <= radius then
+            if self:_start_emitter(entry, "idle", dist) then
+                clear_restart(entry)
+            end
+        end
+    end
+end
+
 function PlatformController:_update_emitter(entry, distance)
     local emitter = entry and entry.emitter
     if not emitter then
+        return
+    end
+    if emitter.expected_end and Utils and Utils.realtime_now and Utils.realtime_now() >= emitter.expected_end then
+        emitter.expected_end = nil
+        self:_stop_emitter(entry, "track_complete")
         return
     end
     if emitter.next_update and emitter.next_update > Utils.realtime_now() then
@@ -338,6 +586,11 @@ function PlatformController:_update_emitter(entry, distance)
     end
     emitter.next_update = Utils.realtime_now() + Utils.clamp(finite(self.get_setting("elevatormusic_update_interval") or 0.1, 0.1), 0.02, 0.5)
     local radius, _, full = self:_idle_settings()
+    local scaled_radius = self:_scaled_distance(radius)
+    if distance and scaled_radius and distance > (scaled_radius * 3.5) then
+        self:_stop_emitter(entry, "listener_far")
+        return
+    end
     local target_volume = self:_volume_for_mode(emitter.mode, distance, radius, full)
     if emitter.mode == "activation" and not entry.moving then
         if emitter.linger_until then
@@ -345,7 +598,7 @@ function PlatformController:_update_emitter(entry, distance)
             if remaining <= 0 then
                 emitter.linger_until = nil
                 emitter.linger_total = nil
-                if self.get_setting(self.idle_after_activation_setting) and self:_idle_allowed(distance) then
+                if (not self:_activation_only()) and self.get_setting(self.idle_after_activation_setting) and self:_idle_allowed(distance) then
                     emitter.mode = "idle"
                     target_volume = self:_volume_for_mode("idle", distance, radius, full)
                 else
@@ -357,7 +610,7 @@ function PlatformController:_update_emitter(entry, distance)
                 target_volume = target_volume * Utils.clamp(remaining / span, 0, 1)
             end
         else
-            if self.get_setting(self.idle_after_activation_setting) and self:_idle_allowed(distance) then
+            if (not self:_activation_only()) and self.get_setting(self.idle_after_activation_setting) and self:_idle_allowed(distance) then
                 emitter.mode = "idle"
                 target_volume = self:_volume_for_mode("idle", distance, radius, full)
             else
@@ -380,7 +633,10 @@ function PlatformController:_ensure_entry(extension)
     if not unit or not Unit or not Unit.alive or not Unit.alive(unit) then
         return nil
     end
-    local key = Unit and Unit.id_string and Unit.id_string(unit) or tostring(unit)
+    local key = extension and extension._elevator_override_key
+    if not key then
+        key = Unit and Unit.id_string and Unit.id_string(unit) or tostring(unit)
+    end
     if not key then
         return nil
     end
@@ -396,11 +652,29 @@ function PlatformController:_ensure_entry(extension)
             last_distance = nil,
             marker_position = nil,
             marker_position_box = nil,
+            last_world_position_box = nil,
+            last_world_position = nil,
+            last_motion_time = nil,
+            effective_moving = false,
+            pending_stop = false,
+            restart_mode = nil,
+            restart_distance = nil,
+            restart_time = nil,
+            force_direction_none = false,
         }
+        if self:_activation_only() then
+            entry.force_direction_none = true
+            entry.direction = "none"
+            entry.moving = false
+            entry.effective_moving = false
+        end
         self.state.platforms[key] = entry
     else
         entry.unit = unit
         entry.extension = extension
+    end
+    if self:_activation_only() and entry.emitter and entry.emitter.mode ~= "activation" then
+        self:_stop_emitter(entry, "activation_only")
     end
     return entry
 end
@@ -410,16 +684,31 @@ function PlatformController:drop_platform(unit)
         return
     end
     local key = Unit.id_string and Unit.id_string(unit) or tostring(unit)
-    if not key then
-        return
+    local entry = nil
+    if key then
+        entry = self.state.platforms[key]
     end
-    local entry = self.state.platforms[key]
+    if not entry then
+        for stored_key, stored_entry in pairs(self.state.platforms) do
+            if stored_entry.unit == unit then
+                key = stored_key
+                entry = stored_entry
+                break
+            end
+        end
+    end
     if not entry then
         return
     end
     self:_stop_emitter(entry, "platform_removed")
     self:_toggle_marker(entry, nil)
-    self.state.platforms[key] = nil
+    clear_restart(entry)
+    entry.last_world_position_box = nil
+    entry.last_world_position = nil
+    entry.last_motion_time = nil
+    if key then
+        self.state.platforms[key] = nil
+    end
 end
 
 function PlatformController:on_platform_update(extension)
@@ -439,12 +728,8 @@ function PlatformController:on_direction_event(extension, direction_index)
     entry.direction = direction_name
     entry.moving = direction_name ~= "none"
     if entry.emitter and entry.emitter.mode == "activation" and not entry.moving then
-        local linger = Utils.clamp(finite(self.get_setting(self.activation_linger_setting) or 0, 0), 0, 20)
-        if linger > 0 then
-            entry.emitter.linger_total = linger
-            entry.emitter.linger_until = Utils.realtime_now() + linger
-        end
-    elseif entry.moving and self.get_setting(self.play_activation_setting) then
+        self:_apply_activation_linger(entry)
+    elseif entry.moving and self:_activation_enabled() then
         if entry.emitter then
             entry.emitter.mode = "activation"
             entry.emitter.linger_until = nil
@@ -453,6 +738,51 @@ function PlatformController:on_direction_event(extension, direction_index)
             self:_start_emitter(entry, "activation", entry.last_distance)
         end
     end
+end
+
+function PlatformController:_physical_motion(entry, position)
+    if not Vector3 or not Vector3.distance or not position then
+        return entry and entry.moving
+    end
+
+    local previous = nil
+
+    if entry.last_world_position_box and entry.last_world_position_box.unbox then
+        local ok, stored = pcall(function()
+            return entry.last_world_position_box:unbox()
+        end)
+        if ok then
+            previous = stored
+        end
+        entry.last_world_position_box:store(position)
+    elseif Vector3Box then
+        entry.last_world_position_box = Vector3Box(position)
+    elseif entry.last_world_position then
+        previous = entry.last_world_position
+        entry.last_world_position = clone_vector(position)
+    else
+        entry.last_world_position = clone_vector(position)
+    end
+
+    if not previous then
+        return false
+    end
+
+    local ok, delta = pcall(Vector3.distance, previous, position)
+    if not ok then
+        return entry.moving
+    end
+
+    if delta >= PHYSICAL_MOTION_EPSILON then
+        entry.last_motion_time = realtime_now()
+        return true
+    end
+
+    if entry.last_motion_time then
+        return (realtime_now() - entry.last_motion_time) <= PHYSICAL_MOTION_MEMORY
+    end
+
+    return false
 end
 
 function PlatformController:update(listener_position)
@@ -478,18 +808,54 @@ function PlatformController:_update_platform(entry, listener_position)
     if entry.extension and entry.extension.story_direction then
         local dir = entry.extension:story_direction()
         local lookup = rawget(_G, "NetworkLookup")
-        entry.direction = lookup and lookup.moveable_platform_direction and lookup.moveable_platform_direction[dir] or "none"
+        local direction_name = lookup and lookup.moveable_platform_direction and lookup.moveable_platform_direction[dir] or "none"
+        if entry.force_direction_none then
+            if direction_name == "none" then
+                entry.force_direction_none = false
+            else
+                direction_name = "none"
+            end
+        end
+        entry.direction = direction_name
         entry.moving = entry.direction ~= "none"
     end
+    local platform_position = nil
+    if Unit and Unit.world_position then
+        local ok, pos = pcall(Unit.world_position, unit, 1)
+        if ok then
+            platform_position = pos
+        end
+    end
     local distance = nil
-    if listener_position and Vector3 and Vector3.distance then
-        local ok, dist = pcall(Vector3.distance, Unit.world_position(unit, 1), listener_position)
+    if platform_position and listener_position and Vector3 and Vector3.distance then
+        local ok, dist = pcall(Vector3.distance, platform_position, listener_position)
         if ok then
             distance = dist
         end
     end
     entry.last_distance = distance
-    local wants_activation = entry.moving and self.get_setting(self.play_activation_setting)
+    local physical_motion = self:_physical_motion(entry, platform_position)
+    local direction_moving = entry.direction ~= "none"
+    local effective_moving = direction_moving
+    if self:_activation_only() then
+        if direction_moving then
+            effective_moving = true
+        else
+            effective_moving = physical_motion
+        end
+    end
+    if entry.effective_moving ~= effective_moving then
+        if entry.effective_moving and not effective_moving then
+            self:_apply_activation_linger(entry)
+        elseif effective_moving and entry.emitter then
+            entry.emitter.linger_total = nil
+            entry.emitter.linger_until = nil
+        end
+        entry.effective_moving = effective_moving
+    end
+    entry.moving = effective_moving
+    self:_attempt_restart(entry, distance)
+    local wants_activation = entry.moving and self:_activation_enabled()
     if wants_activation then
         if not entry.emitter then
             self:_start_emitter(entry, "activation", distance)
@@ -505,7 +871,7 @@ function PlatformController:_update_platform(entry, listener_position)
         self:_update_emitter(entry, distance)
         return
     end
-    if not self.get_setting(self.idle_enabled_setting) then
+    if self:_activation_only() then
         if entry.emitter and entry.emitter.mode == "idle" then
             self:_stop_emitter(entry, "idle_disabled")
         end
@@ -532,15 +898,62 @@ function PlatformController:_update_platform(entry, listener_position)
     end
 end
 
-function PlatformController:stop_all(reason)
+function PlatformController:stop_all(reason, immediate)
     for _, entry in pairs(self.state.platforms) do
-        self:_stop_emitter(entry, reason)
+        self:_stop_emitter(entry, reason, immediate)
+        clear_restart(entry)
+        if reason == "activation_toggle" and self:_activation_only() then
+            entry.direction = "none"
+            entry.moving = false
+            entry.effective_moving = false
+            entry.last_motion_time = nil
+            entry.force_direction_none = true
+        end
     end
     self:_set_client_active(false)
+    self:_stop_process_tracks(reason)
+end
+
+function PlatformController:set_emitters_suppressed(flag)
+    if self.state then
+        self.state.suppress_new_emitters = flag and true or false
+    end
+end
+
+function PlatformController:emitters_suppressed()
+    return self.state and self.state.suppress_new_emitters or false
+end
+
+function PlatformController:reset(reason)
+    self:stop_all(reason or "reset", true)
+    self.state.platforms = {}
+    self.state.sequence = 0
+    self.state.suppress_new_emitters = false
 end
 
 function PlatformController:get_platforms()
     return self.state.platforms
+end
+
+function PlatformController:refresh_idle(listener_position)
+    if self:_activation_only() then
+        return
+    end
+    local radius = select(1, self:_idle_settings())
+    for _, entry in pairs(self.state.platforms) do
+        if entry and not entry.moving then
+            local distance = self:_platform_distance(entry, listener_position)
+            if distance and distance <= radius then
+                if not entry.emitter then
+                    self:_start_emitter(entry, "idle", distance)
+                elseif entry.emitter.mode ~= "idle" then
+                    entry.emitter.mode = "idle"
+                    entry.emitter.linger_until = nil
+                    entry.emitter.linger_total = nil
+                end
+            end
+        end
+    end
 end
 
 return PlatformController

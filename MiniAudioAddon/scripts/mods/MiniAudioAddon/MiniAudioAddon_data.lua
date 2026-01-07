@@ -15,7 +15,7 @@ return {
             {
                 setting_id = "miniaudioaddon_debug_spheres",
                 type = "checkbox",
-                default_value = true,
+                default_value = false,
                 tooltip = "miniaudioaddon_debug_spheres_desc",
             },
             {
@@ -27,7 +27,7 @@ return {
             {
                 setting_id = "miniaudioaddon_spatial_rolloff",
                 type = "dropdown",
-                default_value = "linear",
+                default_value = "exponential",
                 tooltip = "miniaudioaddon_spatial_rolloff_desc",
                 options = {
                     { text = "miniaudioaddon_rolloff_linear", value = "linear" },

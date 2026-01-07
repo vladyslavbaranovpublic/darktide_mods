@@ -187,6 +187,10 @@ local function handle_daemon_stop_delivery(info)
     if spatial_tests and spatial_tests.handle_stop_delivery then
         spatial_tests.handle_stop_delivery(info.id)
     end
+
+    if EmitterManager and EmitterManager.handle_daemon_stop then
+        EmitterManager.handle_daemon_stop(info.id)
+    end
 end
 
 local function handle_daemon_stop_failure(info)
@@ -459,9 +463,11 @@ if PlatformController and PlatformController.init then
 end
 
 if IOUtils and IOUtils.init then
-    IOUtils.init({ 
-        mod = mod, 
-        DLS = DLS 
+    IOUtils.init({
+        mod = mod,
+        DLS = DLS,
+        Shell = Shell,
+        Utils = Utils,
     })
 end
 

@@ -32,10 +32,42 @@
         EmitterManager.stop_all()
 ]]
 
+local mod = get_mod("MiniAudioAddon")
 local EmitterManager = {}
 
--- Active emitters storage
+-- Runtime emitter storage (per-session)
 local emitters = {}
+
+-- Persisted track ids survive DMF reloads so we can stop leftovers later
+local persistent_state = mod and mod:persistent_table("emitter_manager_state") or {}
+persistent_state.active_tracks = persistent_state.active_tracks or {}
+local persisted_tracks = persistent_state.active_tracks
+
+local function remember_track(emitter_id, track_id)
+    if emitter_id and track_id then
+        persisted_tracks[emitter_id] = track_id
+    end
+end
+
+local function forget_track(emitter_id)
+    if emitter_id then
+        persisted_tracks[emitter_id] = nil
+    end
+end
+
+local function finalize_stop(emitter_id, reason)
+    local emitter = emitters[emitter_id]
+    if not emitter then
+        forget_track(emitter_id)
+        return false
+    end
+    emitters[emitter_id] = nil
+    forget_track(emitter_id)
+    if emitter.config and emitter.config.on_finished then
+        pcall(emitter.config.on_finished, emitter, reason or "manual")
+    end
+    return true
+end
 
 -- Required modules (will be injected via init)
 local Utils = nil
@@ -43,6 +75,21 @@ local PoseTracker = nil
 local DaemonBridge = nil
 local Vector3 = rawget(_G, "Vector3")
 local Quaternion = rawget(_G, "Quaternion")
+
+local function cleanup_persisted_tracks()
+    if not DaemonBridge or not DaemonBridge.stop_spatial_emitter then
+        return
+    end
+    for emitter_id, track_id in pairs(persisted_tracks) do
+        if track_id then
+            DaemonBridge.stop_spatial_emitter({
+                id = track_id,
+                fade = 0,
+            })
+        end
+        persisted_tracks[emitter_id] = nil
+    end
+end
 
 --[[
     Initialize the EmitterManager with required dependencies
@@ -56,6 +103,7 @@ function EmitterManager.init(dependencies)
     Utils = dependencies.Utils
     PoseTracker = dependencies.PoseTracker
     DaemonBridge = dependencies.DaemonBridge
+    cleanup_persisted_tracks()
 end
 
 --[[
@@ -193,6 +241,7 @@ function EmitterManager.create(config)
     
     -- Store in active emitters
     emitters[config.id] = emitter_state
+    remember_track(config.id, track_id)
     
     return config.id
 end
@@ -304,7 +353,11 @@ function EmitterManager.update(dt)
             end
         end
 
-        DaemonBridge.update_spatial_audio(payload, Utils)
+        local ok, err = DaemonBridge.update_spatial_audio(payload, Utils)
+        if not ok then
+            finalize_stop(config.id, "daemon")
+            goto continue
+        end
         
         ::continue::
     end
@@ -335,8 +388,7 @@ function EmitterManager.stop(emitter_id, fade)
     end
     
     -- Remove from active emitters
-    emitters[emitter_id] = nil
-    
+    finalize_stop(emitter_id, "manual")
     return true
 end
 
@@ -352,6 +404,23 @@ function EmitterManager.stop_all(fade)
     for emitter_id, _ in pairs(emitters) do
         EmitterManager.stop(emitter_id, fade)
     end
+end
+
+-- Stop emitters whose config id starts with the provided prefix
+function EmitterManager.stop_by_prefix(prefix, fade)
+    if not prefix or prefix == "" then
+        return 0
+    end
+    local matches = {}
+    for emitter_id in pairs(emitters) do
+        if string.sub(emitter_id, 1, #prefix) == prefix then
+            matches[#matches + 1] = emitter_id
+        end
+    end
+    for _, emitter_id in ipairs(matches) do
+        EmitterManager.stop(emitter_id, fade)
+    end
+    return #matches
 end
 
 --[[
@@ -400,6 +469,19 @@ end
 function EmitterManager.get_position(emitter_id)
     local emitter = emitters[emitter_id]
     return emitter and emitter.current_position or nil
+end
+
+function EmitterManager.handle_daemon_stop(track_id)
+    if not track_id then
+        return false
+    end
+    for emitter_id, emitter in pairs(emitters) do
+        if emitter.id == track_id then
+            finalize_stop(emitter_id, "daemon")
+            return true
+        end
+    end
+    return false
 end
 
 return EmitterManager

@@ -14,29 +14,47 @@ return {
     elevatormusic_enable_desc = {
         en = "Master toggle. Turn this off to silence every elevator/airlock without removing the mod.",
     },
-    elevatormusic_play_activation = {
-        en = "Play during elevator movement",
+    elevatormusic_valk_enable = {
+        en = "Enable gunship/Valkyrie music",
     },
-    elevatormusic_play_activation_desc = {
-        en = "When enabled, a track is started (or promoted from the idle speaker) as soon as the platform begins moving.",
+    elevatormusic_valk_enable_desc = {
+        en = "Attach the same playlist, volume, and disco logic to Valkyrie drop-ships so the emitter follows the transport as it moves.",
+    },
+    elevatormusic_valk_idle_distance = {
+        en = "Gunship idle radius (meters)",
+    },
+    elevatormusic_valk_idle_distance_desc = {
+        en = "How close you must be to the Valkyrie for its idle speaker to spin up. Increase this if you want the ship to start playing while you are farther down the ramp.",
+    },
+    elevatormusic_valk_idle_full_distance = {
+        en = "Gunship full-volume distance (meters)",
+    },
+    elevatormusic_valk_idle_full_distance_desc = {
+        en = "Inside this distance the Valkyrie track hits full volume. Beyond it the controller fades the music down smoothly.",
     },
     elevatormusic_activation_linger = {
         en = "Linger after ride (seconds)",
     },
     elevatormusic_activation_linger_desc = {
-        en = "How long to keep the activation track alive after the platform stops before fading out.",
+        en = "Only used when “Play while you wait nearby” is disabled; keeps the ride track alive for this many seconds before fading out.",
     },
-    elevatormusic_idle_enabled = {
-        en = "Play while you wait nearby",
+    elevatormusic_activation_only = {
+        en = "Play only during movement",
     },
-    elevatormusic_idle_enabled_desc = {
-        en = "Start a quiet “lobby” mix whenever you stand close to a platform that is not moving.",
+    elevatormusic_activation_only_desc = {
+        en = "Override idle playback so audio only plays while the elevator is moving. When the ride ends it fades out after the configured linger delay.",
     },
     elevatormusic_idle_after_activation = {
         en = "Return to idle music after rides",
     },
     elevatormusic_idle_after_activation_desc = {
         en = "If on, once the ride ends (and you are still nearby) the idle speaker spins back up automatically.",
+    },
+    elevatormusic_shuffle_on_end = {
+        en = "Switch tracks when one finishes",
+    },
+    elevatormusic_shuffle_on_end_desc = {
+        en = "Instead of looping the same song forever, stop after a single play and pick another random track automatically.",
     },
     elevatormusic_idle_distance = {
         en = "Idle radius (meters)",
@@ -79,6 +97,12 @@ return {
     },
     elevatormusic_spatial_rolloff_log = {
         en = "Logarithmic",
+    },
+    elevatormusic_spatial_rolloff_exp = {
+        en = "Exponential",
+    },
+    elevatormusic_spatial_rolloff_none = {
+        en = "None",
     },
     elevatormusic_show_markers = {
         en = "Show debug spheres on elevators",
@@ -187,5 +211,59 @@ return {
     },
     elevatormusic_visuals_orbit_speed_desc = {
         en = "Speed multiplier for the center drift (set to 0 for a stationary halo).",
+    },
+    elevatormusic_visuals_scatter_enable = {
+        en = "Enable sprinkle lights",
+    },
+    elevatormusic_visuals_scatter_enable_desc = {
+        en = "Spawns small floating spheres at random positions instead of a single orbit ring.",
+    },
+    elevatormusic_visuals_scatter_count = {
+        en = "Sprinkle count",
+    },
+    elevatormusic_visuals_scatter_count_desc = {
+        en = "How many independent sprinkle spheres to spawn around each emitter.",
+    },
+    elevatormusic_visuals_scatter_distance = {
+        en = "Sprinkle spread radius (meters)",
+    },
+    elevatormusic_visuals_scatter_distance_desc = {
+        en = "Maximum distance from the emitter that sprinkle spheres can spawn.",
+    },
+    elevatormusic_visuals_scatter_size_min = {
+        en = "Sprinkle size (min meters)",
+    },
+    elevatormusic_visuals_scatter_size_min_desc = {
+        en = "Smallest radius for a sprinkle sphere.",
+    },
+    elevatormusic_visuals_scatter_size_max = {
+        en = "Sprinkle size (max meters)",
+    },
+    elevatormusic_visuals_scatter_size_max_desc = {
+        en = "Largest radius for a sprinkle sphere.",
+    },
+    elevatormusic_visuals_scatter_speed = {
+        en = "Sprinkle drift speed",
+    },
+    elevatormusic_visuals_scatter_speed_desc = {
+        en = "Controls how fast sprinkle spheres sway using sine/cosine motion.",
+    },
+    elevatormusic_visuals_scatter_hover = {
+        en = "Sprinkle hover amplitude",
+    },
+    elevatormusic_visuals_scatter_hover_desc = {
+        en = "Vertical bob amount applied to sprinkle spheres (set to 0 for static height).",
+    },
+    elevatormusic_visuals_scatter_sway = {
+        en = "Sprinkle sway distance",
+    },
+    elevatormusic_visuals_scatter_sway_desc = {
+        en = "Horizontal jitter radius for sprinkle spheres so they drift left/right instead of only moving vertically.",
+    },
+    elevatormusic_visuals_scatter_vertical_offset = {
+        en = "Sprinkle vertical offset (meters)",
+    },
+    elevatormusic_visuals_scatter_vertical_offset_desc = {
+        en = "Moves the center of the sprinkle cloud up or down relative to the emitter (negative values lower it).",
     },
 }
