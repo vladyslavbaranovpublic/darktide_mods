@@ -1,9 +1,9 @@
 --[[
 	File: RitualZones_marker.lua
 	Description: Draws ritual trigger zones and shows ritual timers for havoc daemonhosts.
-	Overall Release Version: 1.0.0
-	File Version: 1.0.0
-	Last Updated: 2026-01-06
+	Overall Release Version: 1.01.0
+	File Version: 1.1.0
+	Last Updated: 2026-01-07
 	Author: LAUREHTE
 ]]
 local UIWidget = require("scripts/managers/ui/ui_widget")

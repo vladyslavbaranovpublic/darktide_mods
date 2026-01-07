@@ -1,73 +1,165 @@
 --[[
 	File: RitualZones.lua
 	Description: Draws ritual trigger zones and shows ritual timers for havoc daemonhosts.
-	Overall Release Version: 1.0.0
-	File Version: 1.0.0
-	Last Updated: 2026-01-06
+	Overall Release Version: 1.01.0
+	File Version: 1.1.0
+	Last Updated: 2026-01-07
 	Author: LAUREHTE
 ]]
 local mod = get_mod("RitualZones")
 local RitualZonesMarker = mod:io_dofile("RitualZones/scripts/mods/RitualZones/RitualZones_marker")
 local RitualZonesTimerMarker = mod:io_dofile("RitualZones/scripts/mods/RitualZones/RitualZones_timer_marker")
+local RitualZonesDebugLabelMarker = mod:io_dofile("RitualZones/scripts/mods/RitualZones/RitualZones_debug_label_marker")
 
 local HavocMutatorLocalSettings = require("scripts/settings/havoc/havoc_mutator_local_settings")
 local DaemonhostActions = require("scripts/settings/breed/breed_actions/chaos/chaos_mutator_daemonhost_actions")
 local MainPathQueries = require("scripts/utilities/main_path_queries")
 local NavQueries = require("scripts/utilities/nav_queries")
+local PlayerUnitStatus = require("scripts/utilities/attack/player_unit_status")
 local Breeds = require("scripts/settings/breed/breeds")
 
-local MARKER_ICON = "content/ui/materials/icons/difficulty/difficulty_skull_uprising"
-local MARKER_COLOR = { 180, 120, 255 }
-local PATH_COLOR = { 80, 200, 255 }
-local PROGRESS_COLOR = { 120, 255, 140 }
-local PROGRESS_MAX_COLOR = { 255, 120, 180 }
-local BOSS_TRIGGER_COLOR = { 255, 120, 70 }
-local PACING_TRIGGER_COLOR = { 140, 170, 255 }
-local RESPAWN_PROGRESS_COLOR = { 120, 255, 255 }
-local TRIGGER_POINT_RADIUS = 0.35
-local BOSS_TRIGGER_RADIUS = 0.45
-local RESPAWN_PROGRESS_RADIUS = 0.45
-local RESPAWN_BEACON_AHEAD_DISTANCE = 25
-local RING_COLORS = {
-	red = { 255, 60, 60 },
-	orange = { 255, 150, 40 },
-	yellow = { 255, 220, 80 },
-	purple = { 180, 120, 255 },
+local CONST = {
+	MARKER_ICON = "content/ui/materials/icons/difficulty/difficulty_skull_uprising",
+	MARKER_COLOR = { 180, 120, 255 },
+	PATH_COLOR = { 80, 200, 255 },
+	PROGRESS_COLOR = { 120, 255, 140 },
+	PROGRESS_MAX_COLOR = { 255, 120, 180 },
+	BOSS_TRIGGER_COLOR = { 255, 120, 70 },
+	AMBUSH_TRIGGER_COLOR = { 255, 90, 200 },
+	BACKTRACK_TRIGGER_COLOR = { 255, 160, 40 },
+	PACING_TRIGGER_COLOR = { 140, 170, 255 },
+	RESPAWN_PROGRESS_COLOR = { 120, 255, 255 },
+	RESPAWN_MOVE_TRIGGER_COLOR = { 255, 190, 90 },
+	RESPAWN_BEACON_COLOR = { 140, 255, 200 },
+	TRIGGER_POINT_RADIUS = 0.35,
+	BOSS_TRIGGER_RADIUS = 0.45,
+	RESPAWN_PROGRESS_RADIUS = 0.45,
+	RESPAWN_BEACON_AHEAD_DISTANCE = 25,
+	RESPAWN_MOVE_TRIGGER_DISTANCE = 30,
+	BACKTRACK_ALLOWED_DISTANCE = 50,
+	MAX_PROGRESS_HEIGHT_OFFSET = 0.25,
+	PROGRESS_STACK_STEP = 0.5,
+	PROGRESS_STACK_HEIGHT = 0.35,
+	RING_COLORS = {
+		red = { 255, 60, 60 },
+		orange = { 255, 150, 40 },
+		yellow = { 255, 220, 80 },
+		purple = { 180, 120, 255 },
+	},
+	DEBUG_TEXT_OFFSETS = {
+		["Progress"] = { 0.25, 0.15, 1.0 },
+		["Progress (You)"] = { 0.25, 0.15, 1.0 },
+		["Progress (Leader)"] = { 0.25, 0.25, 1.5 },
+		["Max Progress"] = { -0.25, 0.15, 2.0 },
+		["Boss Trigger"] = { 0.25, -0.15, 1.5 },
+		["Boss Unit Trigger"] = { 0.35, -0.05, 2.5 },
+		["Boss Patrol Trigger"] = { 0.35, -0.15, 3.0 },
+		["Ambush Horde Trigger"] = { 0.25, -0.25, 3.5 },
+		["Backtrack Horde Trigger"] = { -0.25, 0.25, 3.5 },
+		["Respawn Progress"] = { -0.25, -0.15, 1.0 },
+		["Respawn Progress Warning"] = { -0.25, -0.35, 3.5 },
+		["Respawn Beacon Threshold"] = { 0.15, -0.25, 2.0 },
+		["Respawn Backline"] = { -0.35, -0.25, 1.5 },
+		["Respawn Rewind Threshold"] = { 0.35, -0.35, 4.0 },
+		["Respawn Beacon"] = { -0.15, -0.25, 2.0 },
+		["Priority Respawn Beacon"] = { 0.15, -0.25, 3.0 },
+		["Rescue Move Trigger"] = { -0.15, -0.25, 1.5 },
+		["Rescue Move Trigger Warning"] = { -0.15, -0.35, 3.0 },
+		["Priority Move Trigger"] = { -0.15, -0.25, 1.5 },
+		["Priority Move Trigger Warning"] = { -0.15, -0.35, 3.0 },
+		["Ritual Spawn Trigger"] = { 0.25, 0, 2.0 },
+		["Ritual Start Trigger"] = { 0, 0.25, 2.5 },
+		["Ritual Speedup Trigger"] = { -0.25, 0, 3.0 },
+		["Twins Ambush Trigger"] = { 0.35, -0.25, 3.5 },
+		["Twins Spawn Trigger"] = { -0.35, -0.25, 3.0 },
+		["Pacing Spawn"] = { 0.35, 0.25, 1.5 },
+		["Pacing Spawn: monsters"] = { 0.45, 0.25, 2.0 },
+		["Pacing Spawn: witches"] = { 0.15, 0.15, 2.5 },
+		["Pacing Spawn: captains"] = { 0.15, 0.15, 3.0 },
+		["Trigger"] = { 0, 0.25, 0.5 },
+	},
 }
-local DEBUG_TEXT_OFFSETS = {
-	["Progress"] = { 0.25, 0.15, 0.5 },
-	["Max Progress"] = { -0.25, 0.15, 1.5 },
-	["Boss Trigger"] = { 0.25, -0.15, 2 },
-	["Boss Unit Trigger"] = { 0.35, -0.05, 2 },
-	["Boss Patrol Trigger"] = { 0.35, -0.15, 2 },
-	["Respawn Progress"] = { -0.25, -0.15, 0 },
-	["Ritual Spawn Trigger"] = { 0.25, 0, 0.5 },
-	["Ritual Start Trigger"] = { 0, 0.25, 1 },
-	["Ritual Speedup Trigger"] = { -0.25, 0, 3 },
-	["Twins Ambush Trigger"] = { 0.35, -0.25, 2.5 },
-	["Twins Spawn Trigger"] = { -0.35, -0.25, 1.5 },
-	["Pacing Spawn"] = { 0.35, 0.25, 1 },
-	["Pacing Spawn: monsters"] = { 0.45, 0.25, 1 },
-	["Pacing Spawn: witches"] = { 0.15, 0.15, 2 },
-	["Pacing Spawn: captains"] = { 0.15, 0.15, 1.5 },
-	["Trigger"] = { 0, 0.25, 0 },
+local CACHE = {
+	VERSION = 1,
+	DISTANCE_TOLERANCE = 0.2,
+	PATH_TOLERANCE = 5,
+	UPDATE_INTERVAL = 1.0,
+	MAX_RECORDS_PER_MISSION = 60,
 }
+local offline_cache = mod:persistent_table("offline_cache")
+local cache_loaded = false
+local cache_load_failed = false
+local cache_runtime_dirty = false
+local last_recorded_mission = nil
+local cache_record_mission = nil
+local cache_record_count = 0
+local last_cache_skip_t = -math.huge
+local last_cache_skip_reason = nil
+local _io = Mods and Mods.lua and Mods.lua.io or nil
+local _os = Mods and Mods.lua and Mods.lua.os or nil
+local _loadstring = Mods and Mods.lua and Mods.lua.loadstring or nil
+local CACHE_DIR_FALLBACK = "mods/RitualZones/cache"
+local CACHE_FILE_FALLBACK = "mods/RitualZones/cache/ritualzones_cache.lua"
+
+local function cache_debug(message)
+	if mod:get("cache_debug_enabled") then
+		mod:echo("[RitualZones Cache] " .. tostring(message))
+	end
+end
+
+local function cache_debug_skip(reason, t, min_interval)
+	if not mod:get("cache_debug_enabled") then
+		return
+	end
+	local now = t
+	if not now and Managers.time and Managers.time.time then
+		local ok, value = pcall(Managers.time.time, Managers.time, "gameplay")
+		if ok then
+			now = value
+		end
+	end
+	local interval = min_interval or 1.0
+	if last_cache_skip_reason ~= reason or (now and (now - last_cache_skip_t) >= interval) then
+		cache_debug(string.format("Record skipped: %s", reason))
+		last_cache_skip_reason = reason
+		if now then
+			last_cache_skip_t = now
+		end
+	end
+end
 
 local markers = {}
 local timer_markers = {}
 local timer_state = {}
+local debug_label_markers = {}
+local debug_label_generation = 0
 local debug_lines = { world = nil, object = nil }
 local max_progress_distance = nil
+local player_progress = {}
 local boss_triggered = {}
 local speedup_triggered = {}
 local ritual_start_triggered = {}
+local ritual_spawn_triggered = {}
 local pacing_triggered = {}
+local ambush_triggered = {}
 local markers_dirty = true
 local timer_dirty = true
 local marker_generation = 0
 local cleanup_done = false
 local debug_text_manager = nil
 local debug_text_world = nil
+local last_debug_refresh_t = nil
+local last_cache_update_t = -math.huge
+local last_cache_record_enabled = nil
+local last_cache_use_enabled = nil
+local last_cache_use_offline_enabled = nil
+local last_active_respawn_beacon = nil
+local last_active_respawn_beacon_distance = nil
+local respawn_waiting_active = false
+local respawn_rewind_crossed = false
+local respawn_rewind_lost = false
+local debug_text_z_offset = 0
+local get_player_name = nil
 local LineObject = rawget(_G, "LineObject")
 local Color = rawget(_G, "Color")
 local Matrix4x4 = rawget(_G, "Matrix4x4")
@@ -119,6 +211,888 @@ local function is_gameplay_state()
 	return true
 end
 
+local function is_server()
+	return Managers.state and Managers.state.game_session and Managers.state.game_session:is_server() or false
+end
+
+local function cache_use_enabled()
+	local use_enabled = mod:get("cache_use_enabled")
+	if use_enabled == nil then
+		return true
+	end
+	return use_enabled
+end
+
+local function cache_use_offline_enabled()
+	return mod:get("cache_use_offline_enabled") or false
+end
+
+local function cache_record_enabled()
+	return mod:get("cache_record_enabled") or false
+end
+
+local function debug_text_mode()
+	local mode = mod:get("debug_text_enabled")
+	if mode == nil then
+		return "off"
+	end
+	if mode == true then
+		return "both"
+	end
+	if mode == false then
+		return "off"
+	end
+	return mode
+end
+
+local function debug_text_enabled_mode(mode)
+	return mode == "on"
+		or mode == "labels"
+		or mode == "distances"
+		or mode == "both"
+end
+
+local function debug_text_show_labels(mode)
+	return mode == "on" or mode == "labels" or mode == "both"
+end
+
+local function debug_text_show_distances(mode)
+	return mode == "on" or mode == "distances" or mode == "both"
+end
+
+local function cache_reads_allowed()
+	return cache_use_enabled() or cache_use_offline_enabled() or cache_record_enabled()
+end
+
+local function is_havoc_ritual_active()
+	if not Managers or not Managers.state or not Managers.state.difficulty then
+		return false
+	end
+	local difficulty = Managers.state.difficulty
+	if not difficulty.get_parsed_havoc_data then
+		return false
+	end
+	local ok, havoc_data = pcall(difficulty.get_parsed_havoc_data, difficulty)
+	if not ok or not havoc_data or not havoc_data.circumstances then
+		return false
+	end
+	for i = 1, #havoc_data.circumstances do
+		if havoc_data.circumstances[i] == "mutator_havoc_chaos_rituals" then
+			return true
+		end
+	end
+	return false
+end
+
+local function can_record_cache()
+	if is_server() then
+		return true
+	end
+	local connection = Managers.connection
+	if connection and connection.is_host then
+		local ok, is_host = pcall(connection.is_host, connection)
+		if ok and is_host then
+			return true
+		end
+	end
+	return false
+end
+
+local function get_mission_name()
+	local mission_manager = Managers.state and Managers.state.mission
+	if mission_manager and mission_manager.mission_name then
+		local ok, mission_name = pcall(mission_manager.mission_name, mission_manager)
+		if ok then
+			return mission_name
+		end
+	end
+	return nil
+end
+
+local function get_cache_root()
+	local root = offline_cache.maps
+	if not root then
+		root = {}
+		offline_cache.maps = root
+	end
+	return root
+end
+
+local function normalize_path(path)
+	if not path or path == "" then
+		return nil
+	end
+	path = path:gsub("/", "\\")
+	path = path:gsub("\\+$", "")
+	return path
+end
+
+local function mod_root_from_script()
+	if not mod or type(mod.script_mod_path) ~= "function" then
+		return nil
+	end
+	local ok, script_path = pcall(mod.script_mod_path, mod)
+	if not ok or not script_path or script_path == "" then
+		return nil
+	end
+	script_path = normalize_path(script_path)
+	if not script_path then
+		return nil
+	end
+	local trimmed = script_path:gsub("[/\\]scripts[/\\].-$", "")
+	return normalize_path(trimmed)
+end
+
+local function script_mod_root()
+	if not mod or type(mod.script_mod_path) ~= "function" then
+		return nil
+	end
+	local ok, script_path = pcall(mod.script_mod_path, mod)
+	if not ok or not script_path or script_path == "" then
+		return nil
+	end
+	return normalize_path(script_path)
+end
+
+local function resolve_mod_root()
+	local root = mod_root_from_script()
+	if root then
+		return root
+	end
+	if mod and mod._path and mod._path ~= "" then
+		root = normalize_path(mod._path)
+	end
+	if mod and type(mod.get_mod_path) == "function" then
+		local ok, value = pcall(mod.get_mod_path, mod)
+		if ok and value and value ~= "" then
+			root = normalize_path(value)
+		end
+	end
+	if Mods and mod and type(mod.get_name) == "function" then
+		local ok, name = pcall(mod.get_name, mod)
+		local mod_name = ok and name or nil
+		if mod_name and Mods.mods and Mods.mods[mod_name] then
+			local mod_data = Mods.mods[mod_name]
+			root = normalize_path(mod_data.path or mod_data._path)
+		end
+	end
+	if not root then
+		return nil
+	end
+	if not root:match("^%a:[/\\]") and not root:match("^\\\\") then
+		if not root:lower():match("^mods[/\\]") then
+			root = normalize_path("mods\\" .. root)
+		end
+	end
+	return root
+end
+
+local function build_mod_path(relative_path)
+	if not relative_path then
+		return nil
+	end
+	local root = resolve_mod_root()
+	if not root then
+		return relative_path
+	end
+	local normalized_relative = relative_path:gsub("/", "\\")
+	return root .. "\\" .. normalized_relative
+end
+
+local function get_appdata_cache_paths()
+	if not _os or not _os.getenv then
+		return nil, nil
+	end
+	local appdata = _os.getenv("APPDATA") or _os.getenv("AppData")
+	if not appdata or appdata == "" then
+		return nil, nil
+	end
+	local base = appdata .. "\\Fatshark\\Darktide\\RitualZones\\cache"
+	local file = base .. "\\ritualzones_cache.lua"
+	return base, file
+end
+
+local function get_mod_cache_paths()
+	local dir = build_mod_path("cache")
+	local file = build_mod_path("cache/ritualzones_cache.lua")
+	if dir == "cache" or file == "cache\\ritualzones_cache.lua" then
+		dir = CACHE_DIR_FALLBACK
+		file = CACHE_FILE_FALLBACK
+	end
+	return dir, file
+end
+
+local function get_script_cache_paths()
+	local root = script_mod_root()
+	if not root then
+		local mod_name = "RitualZones"
+		if mod and type(mod.get_name) == "function" then
+			local ok, name = pcall(mod.get_name, mod)
+			if ok and name and name ~= "" then
+				mod_name = name
+			end
+		end
+		root = build_mod_path("scripts/mods/" .. mod_name)
+		root = normalize_path(root)
+	end
+	if not root then
+		root = normalize_path("mods\\RitualZones\\scripts\\mods\\RitualZones")
+	end
+	local dir = root .. "\\cache"
+	local file = dir .. "\\ritualzones_cache.lua"
+	return dir, file
+end
+
+local function get_primary_cache_paths()
+	local app_dir, app_file = get_appdata_cache_paths()
+	if app_dir and app_file then
+		return app_dir, app_file
+	end
+	return get_mod_cache_paths()
+end
+
+local function mkdir(path)
+	if not path or not _os or not _os.execute then
+		return
+	end
+	local normalized = path:gsub("/", "\\")
+	_os.execute('if not exist "' .. normalized .. '" mkdir "' .. normalized .. '"')
+end
+
+local function ensure_cache_dir()
+	if not _io or not _os or not _os.execute then
+		return
+	end
+	local cache_dir = select(1, get_primary_cache_paths())
+	if cache_dir then
+		mkdir(cache_dir)
+	end
+	local mod_dir = select(1, get_mod_cache_paths())
+	if mod_dir then
+		mkdir(mod_dir)
+	end
+	local script_dir = select(1, get_script_cache_paths())
+	if script_dir then
+		mkdir(script_dir)
+	end
+end
+
+local function cache_file_exists()
+	if not _io then
+		return false
+	end
+	local _, cache_file = get_primary_cache_paths()
+	local file = cache_file and _io.open(cache_file, "r")
+	if file then
+		file:close()
+		return true
+	end
+	local _, mod_file = get_mod_cache_paths()
+	local mod_handle = mod_file and _io.open(mod_file, "r")
+	if mod_handle then
+		mod_handle:close()
+		return true
+	end
+	local _, script_file = get_script_cache_paths()
+	local script_handle = script_file and _io.open(script_file, "r")
+	if script_handle then
+		script_handle:close()
+		return true
+	end
+	return false
+end
+
+local distance_exists = nil
+local add_distance_to_cache = nil
+local add_entry_to_cache = nil
+local is_finite_number = nil
+
+local function sanitize_cache_content(content)
+	if not content then
+		return content, false
+	end
+	local cleaned = content
+	cleaned = cleaned:gsub("^\239\187\191", "")
+	cleaned = cleaned:gsub("%z", "")
+	cleaned = cleaned:gsub("[\1-\8\11\12\14-\31\127]", "")
+	cleaned = cleaned:gsub("%-?1%.#IND", "0")
+	cleaned = cleaned:gsub("%-?1%.#INF", "0")
+	cleaned = cleaned:gsub("%f[%w][Nn][Aa][Nn]%f[%W]", "0")
+	cleaned = cleaned:gsub("%f[%w][Ii][Nn][Ff]%f[%W]", "0")
+	cleaned = cleaned:gsub("([\r\n][\t ]*)end%s*=", "%1[\"end\"] =")
+	return cleaned, cleaned ~= content
+end
+
+local function is_array_table(tbl)
+	local count = 0
+	for key, _ in pairs(tbl) do
+		if type(key) ~= "number" then
+			return false
+		end
+		if key > count then
+			count = key
+		end
+	end
+	return count == #tbl
+end
+
+local serialize_table = nil
+local write_cache_file = nil
+local RESERVED_KEYS = {
+	["and"] = true,
+	["break"] = true,
+	["do"] = true,
+	["else"] = true,
+	["elseif"] = true,
+	["end"] = true,
+	["false"] = true,
+	["for"] = true,
+	["function"] = true,
+	["goto"] = true,
+	["if"] = true,
+	["in"] = true,
+	["local"] = true,
+	["nil"] = true,
+	["not"] = true,
+	["or"] = true,
+	["repeat"] = true,
+	["return"] = true,
+	["then"] = true,
+	["true"] = true,
+	["until"] = true,
+	["while"] = true,
+}
+
+local function serialize_value(value, indent)
+	local value_type = type(value)
+	if value_type == "table" then
+		return serialize_table(value, indent)
+	elseif value_type == "string" then
+		return string.format("%q", value)
+	elseif value_type == "number" or value_type == "boolean" then
+		if value_type == "number" and (value ~= value or value == math.huge or value == -math.huge) then
+			return "0"
+		end
+		return tostring(value)
+	end
+	return "nil"
+end
+
+serialize_table = function(tbl, indent)
+	indent = indent or 0
+	local pad = string.rep(" ", indent)
+	local next_pad = string.rep(" ", indent + 2)
+	local lines = { "{" }
+
+	if is_array_table(tbl) then
+		for i = 1, #tbl do
+			lines[#lines + 1] = next_pad .. serialize_value(tbl[i], indent + 2) .. ","
+		end
+	else
+		local keys = {}
+		for key, _ in pairs(tbl) do
+			keys[#keys + 1] = key
+		end
+		table.sort(keys, function(a, b)
+			return tostring(a) < tostring(b)
+		end)
+		for i = 1, #keys do
+			local key = keys[i]
+			local key_type = type(key)
+			local key_repr = nil
+			if key_type == "string" and key:match("^[%a_][%w_]*$") and not RESERVED_KEYS[key] then
+				key_repr = key
+			else
+				key_repr = "[" .. serialize_value(key, indent + 2) .. "]"
+			end
+			lines[#lines + 1] = next_pad .. key_repr .. " = " .. serialize_value(tbl[key], indent + 2) .. ","
+		end
+	end
+
+	lines[#lines + 1] = pad .. "}"
+	return table.concat(lines, "\n")
+end
+
+local ensure_cache_loaded = nil
+
+local function load_cache_file()
+	if cache_loaded or not _io or not _loadstring then
+		return
+	end
+
+	local mod_dir, mod_file = get_mod_cache_paths()
+	local script_dir, script_file = get_script_cache_paths()
+	local app_dir, app_file = get_appdata_cache_paths()
+	local tried_paths = {
+		{ path = script_file, label = "script_cache" },
+		{ path = mod_file, label = "mod_cache" },
+		{ path = app_file, label = "appdata_cache" },
+	}
+
+	local loaded_any = false
+	local parse_error = false
+	local loaded_script = false
+	local loaded_mod = false
+	local loaded_app = false
+	local merged_maps = {}
+
+	local function get_or_create_entry(mission_name)
+		local entry = merged_maps[mission_name]
+		if not entry then
+			entry = {
+				version = CACHE.VERSION,
+				path = {},
+				ritual = {
+					spawn = {},
+					start = {},
+					speedup = {},
+				},
+				boss = {},
+				pacing = {},
+				ambush = {},
+				respawn = {},
+			}
+			merged_maps[mission_name] = entry
+		end
+		entry.path = entry.path or {}
+		entry.ritual = entry.ritual or { spawn = {}, start = {}, speedup = {} }
+		entry.ritual.spawn = entry.ritual.spawn or {}
+		entry.ritual.start = entry.ritual.start or {}
+		entry.ritual.speedup = entry.ritual.speedup or {}
+		entry.boss = entry.boss or {}
+		entry.pacing = entry.pacing or {}
+		entry.ambush = entry.ambush or {}
+		entry.respawn = entry.respawn or {}
+		return entry
+	end
+
+	local function merge_entry(target, source)
+		if not source then
+			return
+		end
+		if source.path then
+			if source.path.total and not target.path.total then
+				target.path.total = source.path.total
+			end
+			if source.path.segments and not target.path.segments then
+				target.path.segments = source.path.segments
+			end
+			if source.path.start and not target.path.start then
+				target.path.start = source.path.start
+			end
+			if source.path["end"] and not target.path["end"] then
+				target.path["end"] = source.path["end"]
+			end
+		end
+		if source.ritual then
+			local spawn = source.ritual.spawn or {}
+			for i = 1, #spawn do
+				add_distance_to_cache(target.ritual.spawn, spawn[i])
+			end
+			local start = source.ritual.start or {}
+			for i = 1, #start do
+				add_distance_to_cache(target.ritual.start, start[i])
+			end
+			local speedup = source.ritual.speedup or {}
+			for i = 1, #speedup do
+				add_distance_to_cache(target.ritual.speedup, speedup[i])
+			end
+		end
+		local boss = source.boss or {}
+		for i = 1, #boss do
+			local item = boss[i]
+			if type(item) == "table" then
+				add_entry_to_cache(target.boss, item.distance, item.label)
+			else
+				add_entry_to_cache(target.boss, item, nil)
+			end
+		end
+		local pacing = source.pacing or {}
+		for i = 1, #pacing do
+			local item = pacing[i]
+			if type(item) == "table" then
+				add_entry_to_cache(target.pacing, item.distance, item.label)
+			else
+				add_entry_to_cache(target.pacing, item, nil)
+			end
+		end
+		local ambush = source.ambush or {}
+		for i = 1, #ambush do
+			local item = ambush[i]
+			if type(item) == "table" then
+				add_entry_to_cache(target.ambush, item.distance, item.label)
+			else
+				add_entry_to_cache(target.ambush, item, nil)
+			end
+		end
+		local respawn = source.respawn or {}
+		for i = 1, #respawn do
+			add_distance_to_cache(target.respawn, respawn[i])
+		end
+	end
+
+	for i = 1, #tried_paths do
+		local path = tried_paths[i].path
+		local label = tried_paths[i].label
+		if path then
+			local file = _io.open(path, "r")
+			if file then
+				local content = file:read("*all")
+				file:close()
+				local cleaned, changed = sanitize_cache_content(content)
+				if changed then
+					cache_debug(string.format("Sanitized cache content (%s)", tostring(label)))
+				end
+				local chunk, err = _loadstring(cleaned, path)
+				if chunk then
+					local ok, result = pcall(chunk)
+					if ok and type(result) == "table" and type(result.maps) == "table" then
+						for mission_name, data in pairs(result.maps) do
+							local entry = get_or_create_entry(mission_name)
+							merge_entry(entry, data)
+						end
+						loaded_any = true
+						if label == "script_cache" then
+							loaded_script = true
+						elseif label == "mod_cache" then
+							loaded_mod = true
+						elseif label == "appdata_cache" then
+							loaded_app = true
+						end
+					else
+						parse_error = true
+						cache_debug(string.format("Cache load failed (%s): %s", tostring(label), tostring(result)))
+					end
+				else
+					parse_error = true
+					cache_debug(string.format("Cache load failed (%s): %s", tostring(label), tostring(err)))
+				end
+			end
+		end
+	end
+
+	if loaded_any then
+		offline_cache.version = CACHE.VERSION
+		offline_cache.maps = merged_maps
+		cache_load_failed = false
+	else
+		cache_load_failed = parse_error
+	end
+	cache_loaded = true
+	if loaded_any then
+		write_cache_file()
+		local map_count = 0
+		for _ in pairs(merged_maps) do
+			map_count = map_count + 1
+		end
+		cache_debug(string.format("Loaded cache (maps=%d, script=%s, mod=%s, appdata=%s)", map_count, tostring(loaded_script), tostring(loaded_mod), tostring(loaded_app)))
+	else
+		if parse_error then
+			cache_debug("Cache load failed (parse error)")
+		else
+			cache_debug("No cache data loaded from disk")
+		end
+	end
+end
+
+write_cache_file = function()
+	if not _io then
+		return
+	end
+	if not cache_reads_allowed() and not cache_runtime_dirty then
+		cache_debug("Cache write skipped (disabled)")
+		return
+	end
+	ensure_cache_loaded()
+	if cache_load_failed and cache_file_exists() and not cache_runtime_dirty then
+		return
+	end
+	ensure_cache_dir()
+	local function write_to(path, label)
+		if not path then
+			cache_debug(string.format("Skip write (%s): no path", label or "unknown"))
+			return false
+		end
+		local file = _io.open(path, "w")
+		if not file then
+			cache_debug(string.format("Write failed (%s): %s", label or "unknown", tostring(path)))
+			return false
+		end
+		file:write("-- RitualZones cache\nreturn ")
+		file:write(serialize_table(offline_cache, 0))
+		file:write("\n")
+		file:close()
+		cache_debug(string.format("Write ok (%s): %s", label or "unknown", tostring(path)))
+		return true
+	end
+
+	local _, primary_file = get_primary_cache_paths()
+	local _, mod_file = get_mod_cache_paths()
+	local _, script_file = get_script_cache_paths()
+	local wrote_primary = write_to(primary_file, "appdata")
+	local wrote_mod = write_to(mod_file, "mod")
+	local wrote_script = write_to(script_file, "script")
+	if not wrote_primary and not wrote_mod and not wrote_script then
+		return
+	end
+	cache_runtime_dirty = false
+end
+
+ensure_cache_loaded = function()
+	if cache_loaded then
+		return
+	end
+	if not cache_reads_allowed() then
+		cache_debug("Cache load skipped (disabled)")
+		return
+	end
+	load_cache_file()
+end
+
+local function ensure_cache_entry(mission_name)
+	ensure_cache_loaded()
+	offline_cache.version = CACHE.VERSION
+	local root = get_cache_root()
+	local entry = root[mission_name]
+	local created = false
+	if not entry or entry.version ~= CACHE.VERSION then
+		entry = {
+			version = CACHE.VERSION,
+			path = {},
+			ritual = {
+				spawn = {},
+				start = {},
+				speedup = {},
+			},
+			boss = {},
+			pacing = {},
+			ambush = {},
+			respawn = {},
+		}
+		root[mission_name] = entry
+		created = true
+	end
+	entry.path = entry.path or {}
+	entry.ritual = entry.ritual or { spawn = {}, start = {}, speedup = {} }
+	entry.ritual.spawn = entry.ritual.spawn or {}
+	entry.ritual.start = entry.ritual.start or {}
+	entry.ritual.speedup = entry.ritual.speedup or {}
+	entry.boss = entry.boss or {}
+	entry.pacing = entry.pacing or {}
+	entry.ambush = entry.ambush or {}
+	entry.respawn = entry.respawn or {}
+	return entry, created
+end
+
+local function refresh_cache_from_disk()
+	if not cache_reads_allowed() then
+		cache_debug("Cache refresh skipped (disabled)")
+		return
+	end
+	if cache_runtime_dirty then
+		write_cache_file()
+	end
+	cache_loaded = false
+	cache_load_failed = false
+	load_cache_file()
+end
+
+local function vector_to_table(vec)
+	if not vec or not Vector3 or not Vector3.x then
+		return nil
+	end
+	return { Vector3.x(vec), Vector3.y(vec), Vector3.z(vec) }
+end
+
+local function table_distance(a, b)
+	if not a or not b then
+		return math.huge
+	end
+	local dx = (a[1] or 0) - (b[1] or 0)
+	local dy = (a[2] or 0) - (b[2] or 0)
+	local dz = (a[3] or 0) - (b[3] or 0)
+	return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+local function update_path_signature(entry, path_total)
+	if not entry or not path_total or not is_finite_number(path_total) then
+		return false
+	end
+	local updated = false
+	if entry.path.total ~= path_total then
+		entry.path.total = path_total
+		updated = true
+	end
+	local main_path = Managers.state and Managers.state.main_path
+	local segments = main_path and main_path._main_path_segments
+	if segments and entry.path.segments ~= #segments then
+		entry.path.segments = #segments
+		updated = true
+	end
+	local start_pos = MainPathQueries.position_from_distance(0)
+	if start_pos then
+		local start_tbl = vector_to_table(start_pos)
+		if start_tbl and table_distance(start_tbl, entry.path.start) > 0.1 then
+			entry.path.start = start_tbl
+			updated = true
+		end
+	end
+	local end_pos = MainPathQueries.position_from_distance(path_total)
+	if end_pos then
+		local end_tbl = vector_to_table(end_pos)
+		if end_tbl and table_distance(end_tbl, entry.path["end"]) > 0.1 then
+			entry.path["end"] = end_tbl
+			updated = true
+		end
+	end
+	return updated
+end
+
+distance_exists = function(list, distance, tolerance, label)
+	if not list or not distance then
+		return false
+	end
+	for i = 1, #list do
+		local item = list[i]
+		local item_distance = type(item) == "table" and item.distance or item
+		local item_label = type(item) == "table" and item.label or nil
+		if (not label or label == item_label) and item_distance ~= nil then
+			if math.abs(item_distance - distance) <= tolerance then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+add_distance_to_cache = function(list, distance, tolerance)
+	if not distance or not list or not is_finite_number(distance) then
+		return false
+	end
+	if distance_exists(list, distance, tolerance or CACHE.DISTANCE_TOLERANCE) then
+		return false
+	end
+	list[#list + 1] = distance
+	return true
+end
+
+add_entry_to_cache = function(list, distance, label, tolerance)
+	if not distance or not list or not is_finite_number(distance) then
+		return false
+	end
+	if distance_exists(list, distance, tolerance or CACHE.DISTANCE_TOLERANCE, label) then
+		return false
+	end
+	list[#list + 1] = {
+		distance = distance,
+		label = label,
+	}
+	return true
+end
+
+local function get_cache_entry(mission_name, path_total)
+	ensure_cache_loaded()
+	if not mission_name then
+		return nil
+	end
+	local root = offline_cache.maps
+	if not root then
+		return nil
+	end
+	local entry = root[mission_name]
+	if not entry or entry.version ~= CACHE.VERSION then
+		return nil
+	end
+	local cached_total = entry.path and entry.path.total
+	if cached_total and path_total then
+		if math.abs(cached_total - path_total) > CACHE.PATH_TOLERANCE then
+			return nil
+		end
+	end
+	return entry
+end
+
+local function cached_path_triggers(entry)
+	if not entry or not entry.ritual then
+		return {}
+	end
+	local triggers = {}
+	local spawn = entry.ritual.spawn or {}
+	local start = entry.ritual.start or {}
+	local speedup = entry.ritual.speedup or {}
+	for i = 1, #spawn do
+		triggers[#triggers + 1] = { id = "spawn_trigger", distance = spawn[i], color = "red" }
+	end
+	for i = 1, #start do
+		triggers[#triggers + 1] = { id = "ritual_start", distance = start[i], color = "orange" }
+	end
+	for i = 1, #speedup do
+		triggers[#triggers + 1] = { id = "ritual_speedup", distance = speedup[i], color = "yellow" }
+	end
+	return triggers
+end
+
+local function cached_boss_triggers(entry)
+	local list = {}
+	if not entry or not entry.boss then
+		return list
+	end
+	for i = 1, #entry.boss do
+		local item = entry.boss[i]
+		if item and item.distance then
+			list[#list + 1] = {
+				distance = item.distance,
+				label = item.label,
+				key = string.format("boss_cache:%s:%.2f", tostring(item.label), item.distance),
+			}
+		end
+	end
+	return list
+end
+
+local function cached_pacing_triggers(entry)
+	local list = {}
+	if not entry or not entry.pacing then
+		return list
+	end
+	for i = 1, #entry.pacing do
+		local item = entry.pacing[i]
+		if item and item.distance then
+			list[#list + 1] = {
+				distance = item.distance,
+				label = item.label,
+				key = string.format("pacing_cache:%s:%.2f", tostring(item.label), item.distance),
+			}
+		end
+	end
+	return list
+end
+
+local function cached_ambush_triggers(entry)
+	local list = {}
+	if not entry or not entry.ambush then
+		return list
+	end
+	for i = 1, #entry.ambush do
+		local item = entry.ambush[i]
+		if item and item.distance then
+			list[#list + 1] = {
+				distance = item.distance,
+				label = item.label,
+				key = string.format("ambush_cache:%s:%.2f", tostring(item.label), item.distance),
+			}
+		end
+	end
+	return list
+end
+
+local function cached_respawn_distances(entry)
+	if not entry or not entry.respawn then
+		return {}
+	end
+	return entry.respawn
+end
+
 local function unit_is_alive(unit)
 	if not unit then
 		return false
@@ -129,8 +1103,80 @@ local function unit_is_alive(unit)
 	return Unit.alive and Unit.alive(unit)
 end
 
-local function is_finite_number(value)
+is_finite_number = function(value)
 	return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+get_priority_respawn_beacon_unit = function(respawn_system)
+	if not respawn_system then
+		return nil
+	end
+	local unit = respawn_system._priority_respawn_beacon
+		or respawn_system._priority_beacon
+		or respawn_system._priority_respawn_beacon_unit
+		or respawn_system._priority_beacon_unit
+		or respawn_system.priority_respawn_beacon
+		or respawn_system.priority_beacon
+	if unit then
+		return unit
+	end
+	local data = respawn_system._priority_respawn_beacon_data or respawn_system._priority_beacon_data
+	if data and data.unit then
+		return data.unit
+	end
+	return nil
+end
+
+get_priority_respawn_beacon_distance = function(respawn_system, priority_unit)
+	if not respawn_system then
+		return nil
+	end
+	local direct = respawn_system._priority_respawn_beacon_distance
+		or respawn_system._priority_beacon_distance
+		or respawn_system._priority_respawn_beacon_main_path_distance
+		or respawn_system._priority_beacon_main_path_distance
+		or respawn_system.priority_respawn_beacon_distance
+		or respawn_system.priority_beacon_distance
+	if is_finite_number(direct) then
+		return direct
+	end
+	local data = respawn_system._priority_respawn_beacon_data or respawn_system._priority_beacon_data
+	if data and is_finite_number(data.distance) then
+		return data.distance
+	end
+	if priority_unit then
+		local lookup = respawn_system._beacon_main_path_distance_lookup
+		if lookup then
+			local distance = lookup[priority_unit]
+			if is_finite_number(distance) then
+				return distance
+			end
+		end
+		local beacon_data = respawn_system._beacon_main_path_data
+		if beacon_data then
+			for i = 1, #beacon_data do
+				local row = beacon_data[i]
+				if row and row.unit == priority_unit and is_finite_number(row.distance) then
+					return row.distance
+				end
+			end
+		end
+	end
+	return nil
+end
+
+is_twins_spawned = function()
+	local mutator_manager = Managers.state and Managers.state.mutator
+	local mutators = mutator_manager and mutator_manager._mutators
+	local mutator_twins = mutators and mutators.mutator_monster_havoc_twins
+	if not mutator_twins then
+		return false
+	end
+	local alive = mutator_twins._alive_monsters
+	if alive and #alive > 0 then
+		return true
+	end
+	return false
 end
 
 local function is_finite_vector(vec)
@@ -177,6 +1223,22 @@ local function safe_distance(a, b)
 	return dist
 end
 
+local function within_draw_distance(position, settings, state)
+	local max_distance = settings and settings.debug_draw_distance or 0
+	if not max_distance or max_distance <= 0 then
+		return true
+	end
+	local player_position = state and state.player_position
+	if not player_position then
+		return true
+	end
+	local distance = safe_distance(position, player_position)
+	if not distance then
+		return true
+	end
+	return distance <= max_distance
+end
+
 local function get_position_travel_distance(position)
 	if not position then
 		return nil
@@ -219,7 +1281,7 @@ local function get_monster_position(monster)
 end
 
 local function get_color(color_name, alpha)
-	local rgb = RING_COLORS[color_name] or RING_COLORS.red
+	local rgb = CONST.RING_COLORS[color_name] or CONST.RING_COLORS.red
 	local a = alpha or 180
 	return Color(a, rgb[1], rgb[2], rgb[3])
 end
@@ -389,6 +1451,93 @@ local function get_unit_travel_distance(unit)
 	return nil
 end
 
+local function player_can_progress(unit)
+	if not unit or not unit_is_alive(unit) then
+		return false
+	end
+	if not PlayerUnitStatus or not PlayerUnitStatus.is_disabled then
+		return true
+	end
+	local unit_data_extension =
+		ScriptUnit.has_extension(unit, "unit_data_system") and ScriptUnit.extension(unit, "unit_data_system")
+	if not unit_data_extension or not unit_data_extension.read_component then
+		return true
+	end
+	local ok, character_state_component = pcall(unit_data_extension.read_component, unit_data_extension, "character_state")
+	if not ok or not character_state_component then
+		return true
+	end
+	local is_disabled = PlayerUnitStatus.is_disabled(character_state_component)
+	return not is_disabled
+end
+
+local function collect_player_progress(path_total)
+	local players_manager = Managers.player
+	if not players_manager then
+		return {}, nil, nil, nil
+	end
+	local players = players_manager:players()
+	local local_player = players_manager:local_player(1)
+	local entries = {}
+	local leader_player = nil
+	local leader_distance = nil
+	local seen = {}
+
+	for _, player in pairs(players) do
+		seen[player] = true
+		local entry = player_progress[player]
+		if not entry then
+			entry = { distance = nil, alive = false }
+			player_progress[player] = entry
+		end
+
+		local unit = player.player_unit
+		local alive_for_progress = unit and player_can_progress(unit)
+		if alive_for_progress then
+			local position = get_unit_position(unit)
+			local distance = position and (get_position_travel_distance(position) or get_unit_travel_distance(unit))
+			if distance and is_finite_number(distance) then
+				if path_total then
+					distance = math.max(0, math.min(distance, path_total))
+				end
+				entry.distance = distance
+				entry.alive = true
+			end
+		end
+		entry.alive = alive_for_progress and entry.distance ~= nil
+
+		if entry.distance then
+			entries[#entries + 1] = {
+				player = player,
+				unit = unit,
+				distance = entry.distance,
+				alive = entry.alive,
+				is_local = player == local_player,
+			}
+			if entry.alive and (not leader_distance or entry.distance > leader_distance) then
+				leader_distance = entry.distance
+				leader_player = player
+			end
+		end
+	end
+
+	for player, _ in pairs(player_progress) do
+		if not seen[player] then
+			player_progress[player] = nil
+		end
+	end
+
+	local local_distance = nil
+	if local_player then
+		local entry = player_progress[local_player]
+		if entry and entry.distance then
+			local_distance = entry.distance
+		end
+	end
+
+	return entries, leader_distance, leader_player, local_distance
+end
+
 local function add_spawn_trigger_distance(triggers, seen, distance)
 	if distance == nil then
 		return
@@ -450,7 +1599,7 @@ local function is_boss_breed(breed_name)
 end
 
 local function add_trigger_entry(entries, seen, key_prefix, distance, label)
-	if not distance then
+	if not distance or not is_finite_number(distance) then
 		return
 	end
 	distance = math.max(0, distance)
@@ -580,6 +1729,64 @@ local function collect_pacing_spawn_triggers()
 	return entries
 end
 
+local function get_default_side_id()
+	local side_system = Managers.state.extension and Managers.state.extension:system("side_system")
+	if not side_system or not side_system.get_default_player_side_name then
+		return nil
+	end
+	local default_side_name = side_system:get_default_player_side_name()
+	local player_side = side_system:get_side_from_name(default_side_name)
+	return player_side and player_side.side_id
+end
+
+local function collect_ambush_triggers()
+	local horde_manager = Managers.state.horde
+	if not horde_manager or not horde_manager.horde_positions then
+		return {}
+	end
+	local positions = horde_manager:horde_positions("ambush_horde")
+	if not positions then
+		return {}
+	end
+	local triggers = {}
+	local seen = {}
+	for i = 1, #positions do
+		local position = positions[i]
+		local distance = position and get_position_travel_distance(position)
+		if distance and is_finite_number(distance) then
+			local key = string.format("ambush:%.2f", distance)
+			if not seen[key] then
+				seen[key] = true
+				triggers[#triggers + 1] = {
+					distance = distance,
+					label = "Ambush Horde Trigger",
+				}
+			end
+		end
+	end
+	return triggers
+end
+
+local function get_backtrack_trigger_distance(path_total)
+	local main_path = Managers.state.main_path
+	if not main_path or not main_path.furthest_travel_distance then
+		return nil
+	end
+	local side_id = get_default_side_id()
+	if not side_id then
+		return nil
+	end
+	local ok, furthest = pcall(main_path.furthest_travel_distance, main_path, side_id)
+	if not ok or not furthest then
+		return nil
+	end
+	local trigger_distance = furthest - CONST.BACKTRACK_ALLOWED_DISTANCE
+	if path_total then
+		trigger_distance = math.max(0, math.min(trigger_distance, path_total))
+	end
+	return trigger_distance
+end
+
 local function collect_respawn_progress_distances()
 	local respawn_system = Managers.state.extension and Managers.state.extension:system("respawn_beacon_system")
 	local distances = {}
@@ -589,7 +1796,7 @@ local function collect_respawn_progress_distances()
 		if not distance then
 			return
 		end
-		local progress = math.max(0, distance - RESPAWN_BEACON_AHEAD_DISTANCE)
+		local progress = math.max(0, distance - CONST.RESPAWN_BEACON_AHEAD_DISTANCE)
 		local key = string.format("respawn:%.2f", progress)
 		if not seen[key] then
 			seen[key] = true
@@ -654,6 +1861,309 @@ local function collect_respawn_progress_distances()
 	end
 
 	return distances
+end
+
+local function collect_respawn_beacon_entries(path_total, fallback_progress)
+	local respawn_system = Managers.state.extension and Managers.state.extension:system("respawn_beacon_system")
+	local entries = {}
+	local seen = {}
+	local priority_unit = get_priority_respawn_beacon_unit(respawn_system)
+
+	local function add_entry(distance, position, unit, is_priority)
+		if not distance or not is_finite_number(distance) then
+			return
+		end
+		if path_total then
+			distance = math.max(0, math.min(distance, path_total))
+		end
+		local key = string.format("beacon:%.2f", distance)
+		if seen[key] then
+			return
+		end
+		seen[key] = true
+		entries[#entries + 1] = {
+			distance = distance,
+			position = position,
+			unit = unit,
+			priority = is_priority or false,
+		}
+	end
+
+	if respawn_system then
+		local beacon_data = respawn_system._beacon_main_path_data
+		if beacon_data then
+			for i = 1, #beacon_data do
+				local data = beacon_data[i]
+				local unit = data and data.unit
+				local distance = data and data.distance
+				local is_priority = data
+					and (data.priority or data.is_priority or data.is_priority_beacon or data.is_priority_respawn_beacon)
+					or (unit and priority_unit and unit == priority_unit)
+				local position = nil
+				if unit and Unit and Unit.world_position then
+					local ok, value = pcall(Unit.world_position, unit, 1)
+					if ok then
+						position = value
+					end
+				end
+				if not position and distance then
+					position = MainPathQueries.position_from_distance(distance)
+				end
+				add_entry(distance, position, unit, is_priority)
+			end
+		else
+			local lookup = respawn_system._beacon_main_path_distance_lookup
+			if lookup then
+				for unit, distance in pairs(lookup) do
+					local is_priority = unit and priority_unit and unit == priority_unit
+					local position = nil
+					if unit and Unit and Unit.world_position then
+						local ok, value = pcall(Unit.world_position, unit, 1)
+						if ok then
+							position = value
+						end
+					end
+					if not position and distance then
+						position = MainPathQueries.position_from_distance(distance)
+					end
+					add_entry(distance, position, unit, is_priority)
+				end
+			end
+		end
+	end
+
+	if #entries == 0 and fallback_progress then
+		for i = 1, #fallback_progress do
+			local distance = fallback_progress[i] + CONST.RESPAWN_BEACON_AHEAD_DISTANCE
+			local position = MainPathQueries.position_from_distance(distance)
+			add_entry(distance, position, nil, false)
+		end
+	end
+
+	if #entries == 0 then
+		local component_system = Managers.state.extension and Managers.state.extension:system("component_system")
+		if component_system and component_system.get_units_from_component_name then
+			local units = component_system:get_units_from_component_name("RespawnBeacon")
+			if units then
+				for i = 1, #units do
+					local unit = units[i]
+					if unit and Unit and Unit.world_position then
+						local ok, position = pcall(Unit.world_position, unit, 1)
+						if ok and position then
+							local distance = get_position_travel_distance(position)
+							add_entry(distance, position, unit, unit == priority_unit)
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return entries
+end
+
+local function is_player_hogtied(player_unit)
+	if not player_unit or not unit_is_alive(player_unit) then
+		return false
+	end
+	if not PlayerUnitStatus or not PlayerUnitStatus.is_hogtied then
+		return false
+	end
+	if not ScriptUnit.has_extension(player_unit, "unit_data_system") then
+		return false
+	end
+	local unit_data_extension = ScriptUnit.extension(player_unit, "unit_data_system")
+	if not unit_data_extension or not unit_data_extension.read_component then
+		return false
+	end
+	local ok, character_state_component =
+		pcall(unit_data_extension.read_component, unit_data_extension, "character_state")
+	if not ok or not character_state_component then
+		return false
+	end
+	return PlayerUnitStatus.is_hogtied(character_state_component)
+end
+
+local function has_hogtied_players()
+	local players_manager = Managers.player
+	if not players_manager then
+		return false
+	end
+	local players = players_manager:players()
+	for _, player in pairs(players) do
+		local unit = player and player.player_unit
+		if unit and is_player_hogtied(unit) then
+			return true
+		end
+	end
+	return false
+end
+
+local function get_behind_player_distance()
+	local main_path = Managers.state.main_path
+	if not main_path or not main_path.behind_unit then
+		return nil
+	end
+	local side_id = get_default_side_id()
+	if not side_id then
+		return nil
+	end
+	local ok, _, behind_distance = pcall(main_path.behind_unit, main_path, side_id)
+	if not ok then
+		return nil
+	end
+	return behind_distance
+end
+
+local function has_players_waiting_to_spawn()
+	local game_mode_manager = Managers.state and Managers.state.game_mode
+	local game_mode = game_mode_manager and game_mode_manager.game_mode and game_mode_manager:game_mode()
+	local players_manager = Managers.player
+	local players = players_manager and players_manager:players()
+	local time_manager = Managers.time
+	local now = nil
+	if time_manager and time_manager.time then
+		local ok, value = pcall(time_manager.time, time_manager, "gameplay")
+		if ok then
+			now = value
+		end
+	end
+	local waiting_to_spawn = false
+	local min_remaining = nil
+
+	if game_mode and game_mode.player_time_until_spawn and players and now then
+		for _, player in pairs(players) do
+			local unit = player and player.player_unit
+			if not unit or not unit_is_alive(unit) then
+				local ok_time, ready_time = pcall(game_mode.player_time_until_spawn, game_mode, player)
+				if ok_time and ready_time and is_finite_number(ready_time) then
+					local remaining = ready_time - now
+					if remaining < 0 then
+						remaining = 0
+					end
+					waiting_to_spawn = true
+					if not min_remaining or remaining < min_remaining then
+						min_remaining = remaining
+					end
+				end
+			end
+		end
+	end
+
+	local spawn_manager = Managers.state and Managers.state.player_unit_spawn
+	if spawn_manager and spawn_manager.has_players_waiting_to_spawn then
+		local ok, waiting = pcall(spawn_manager.has_players_waiting_to_spawn, spawn_manager)
+		if ok and waiting then
+			waiting_to_spawn = true
+			if min_remaining == nil then
+				min_remaining = 0
+			end
+		end
+	end
+
+	return waiting_to_spawn, min_remaining
+end
+
+local function collect_hogtied_move_triggers(path_total, mode)
+	local players_manager = Managers.player
+	if not players_manager then
+		return {}
+	end
+	if mode == "off" then
+		return {}
+	end
+	local behind_distance = get_behind_player_distance()
+	local entries = {}
+	local seen = {}
+	local players = players_manager:players()
+
+	for _, player in pairs(players) do
+		local unit = player.player_unit
+		local include = false
+		if mode == "always" then
+			include = unit and unit_is_alive(unit)
+		else
+			include = is_player_hogtied(unit)
+		end
+		if include then
+			local position = get_unit_position(unit)
+			local distance = position and (get_position_travel_distance(position) or get_unit_travel_distance(unit))
+			if distance and is_finite_number(distance) then
+				local trigger_distance = distance + CONST.RESPAWN_MOVE_TRIGGER_DISTANCE
+				if path_total then
+					trigger_distance = math.max(0, math.min(trigger_distance, path_total))
+				end
+				local key = string.format("rescue_move:%.2f", trigger_distance)
+				if not seen[key] then
+					seen[key] = true
+					local passed = behind_distance and behind_distance > trigger_distance
+					local label = "Rescue Move Trigger"
+					local name = get_player_name(player)
+					if name then
+						label = string.format("Rescue Move Trigger (%s)", name)
+					end
+					entries[#entries + 1] = {
+						distance = trigger_distance,
+						label = label,
+						passed = passed,
+					}
+				end
+			end
+		end
+	end
+
+	return entries
+end
+
+collect_priority_move_triggers = function(path_total, mode, priority_unit)
+	local players_manager = Managers.player
+	if not players_manager or not priority_unit then
+		return {}
+	end
+	if mode == "off" then
+		return {}
+	end
+	local behind_distance = get_behind_player_distance()
+	local entries = {}
+	local seen = {}
+	local players = players_manager:players()
+
+	for _, player in pairs(players) do
+		local unit = player.player_unit
+		local include = false
+		if mode == "always" then
+			include = unit and unit_is_alive(unit)
+		else
+			include = is_player_hogtied(unit)
+		end
+		if include then
+			local position = get_unit_position(unit)
+			local distance = position and (get_position_travel_distance(position) or get_unit_travel_distance(unit))
+			if distance and is_finite_number(distance) then
+				local trigger_distance = distance + CONST.RESPAWN_MOVE_TRIGGER_DISTANCE
+				if path_total then
+					trigger_distance = math.max(0, math.min(trigger_distance, path_total))
+				end
+				local key = string.format("priority_move:%.2f", trigger_distance)
+				if not seen[key] then
+					seen[key] = true
+					local passed = behind_distance and behind_distance > trigger_distance
+					local label = "Priority Move Trigger"
+					local name = get_player_name(player)
+					if name then
+						label = string.format("Priority Move Trigger (%s)", name)
+					end
+					entries[#entries + 1] = {
+						distance = trigger_distance,
+						label = label,
+						passed = passed,
+					}
+				end
+			end
+		end
+	end
+
+	return entries
 end
 
 local function get_ritual_total_time()
@@ -858,6 +2368,117 @@ local function collect_path_triggers(ritual_units)
 	return triggers
 end
 
+local function record_offline_cache(ritual_units, t)
+	if not mod:get("cache_record_enabled") then
+		cache_debug_skip("record disabled", t, 2)
+		return
+	end
+	if not can_record_cache() then
+		cache_debug_skip("not server/host", t, 2)
+		return
+	end
+	if not is_gameplay_state() then
+		cache_debug_skip("not in gameplay state", t, 2)
+		return
+	end
+	local mission_name = get_mission_name()
+	if not mission_name or mission_name == "hub_ship" then
+		cache_debug_skip("invalid mission name", t, 2)
+		return
+	end
+	if mission_name ~= cache_record_mission then
+		cache_record_mission = mission_name
+		cache_record_count = 0
+	end
+	if cache_record_count >= CACHE.MAX_RECORDS_PER_MISSION then
+		cache_debug_skip("record limit reached", t, 5)
+		return
+	end
+	ensure_cache_loaded()
+	if not cache_file_exists() then
+		write_cache_file()
+	end
+	local main_path_ready = true
+	if MainPathQueries.is_main_path_registered and not MainPathQueries.is_main_path_registered() then
+		main_path_ready = false
+	end
+	local update_interval = mod:get("cache_update_interval") or CACHE.UPDATE_INTERVAL
+	if update_interval < 0.1 then
+		update_interval = 0.1
+	end
+	if t and (t - last_cache_update_t) < update_interval then
+		cache_debug_skip("update interval", t, update_interval)
+		return
+	end
+	last_cache_update_t = t or 0
+
+	local entry, created = ensure_cache_entry(mission_name)
+	local updated = created
+	if mission_name ~= last_recorded_mission then
+		last_recorded_mission = mission_name
+		updated = true
+	end
+	if main_path_ready then
+		local path_total = MainPathQueries.total_path_distance and MainPathQueries.total_path_distance()
+		if path_total then
+			updated = update_path_signature(entry, path_total) or updated
+		end
+
+		local ritual_triggers = collect_path_triggers(ritual_units or {})
+		for i = 1, #ritual_triggers do
+			local trigger = ritual_triggers[i]
+			if trigger.id == "spawn_trigger" then
+				updated = add_distance_to_cache(entry.ritual.spawn, trigger.distance) or updated
+			elseif trigger.id == "ritual_start" then
+				updated = add_distance_to_cache(entry.ritual.start, trigger.distance) or updated
+			elseif trigger.id == "ritual_speedup" then
+				updated = add_distance_to_cache(entry.ritual.speedup, trigger.distance) or updated
+			end
+		end
+
+		local boss_triggers = collect_boss_triggers({
+			mutator = true,
+			twins = true,
+			boss_patrols = true,
+		})
+		for i = 1, #boss_triggers do
+			local trigger = boss_triggers[i]
+			updated = add_entry_to_cache(entry.boss, trigger.distance, trigger.label) or updated
+		end
+
+		local pacing_triggers = collect_pacing_spawn_triggers()
+		for i = 1, #pacing_triggers do
+			local trigger = pacing_triggers[i]
+			updated = add_entry_to_cache(entry.pacing, trigger.distance, trigger.label) or updated
+		end
+
+		local ambush_triggers = collect_ambush_triggers()
+		for i = 1, #ambush_triggers do
+			local trigger = ambush_triggers[i]
+			updated = add_entry_to_cache(entry.ambush, trigger.distance, trigger.label) or updated
+		end
+
+		local respawn_distances = collect_respawn_progress_distances()
+		for i = 1, #respawn_distances do
+			updated = add_distance_to_cache(entry.respawn, respawn_distances[i]) or updated
+		end
+	elseif updated then
+		cache_debug("Main path not registered yet; deferring path capture")
+	else
+		cache_debug_skip("main path not registered", t, 2)
+	end
+
+	if updated then
+		entry.updated_at = os.time()
+		cache_runtime_dirty = true
+		write_cache_file()
+		cache_debug(string.format("Updated cache for %s", tostring(mission_name)))
+		cache_record_count = cache_record_count + 1
+	else
+		cache_debug_skip("no new data", t, update_interval)
+	end
+end
+
 local function clear_markers()
 	if not Managers.event then
 		markers = {}
@@ -886,12 +2507,91 @@ local function clear_timer_markers()
 	end
 end
 
+local function clear_debug_label_markers()
+	if not Managers.event then
+		debug_label_markers = {}
+		return
+	end
+
+	for key, entry in pairs(debug_label_markers) do
+		if entry.id then
+			Managers.event:trigger("remove_world_marker", entry.id)
+		end
+		debug_label_markers[key] = nil
+	end
+end
+
+local function begin_debug_label_markers()
+	debug_label_generation = debug_label_generation + 1
+end
+
+local function finalize_debug_label_markers()
+	if not Managers.event then
+		debug_label_markers = {}
+		return
+	end
+	for key, entry in pairs(debug_label_markers) do
+		if entry.generation ~= debug_label_generation then
+			if entry.id then
+				Managers.event:trigger("remove_world_marker", entry.id)
+			end
+			debug_label_markers[key] = nil
+		end
+	end
+end
+
+local function build_debug_label_key(text, position)
+	if not position then
+		return tostring(text or "")
+	end
+	local base = tostring(text or "")
+	base = base:gsub("%s%[[^%]]+%]$", "")
+	local step = 0.1
+	local x = math.floor((position.x or 0) / step + 0.5) * step
+	local y = math.floor((position.y or 0) / step + 0.5) * step
+	local z = math.floor((position.z or 0) / step + 0.5) * step
+	return string.format("%s@%.1f,%.1f,%.1f", base, x, y, z)
+end
+
+local function ensure_debug_label_marker(key, text, position, size, color)
+	if not Managers.event or not RitualZonesDebugLabelMarker then
+		return
+	end
+	local entry = debug_label_markers[key]
+	if entry and entry.id and entry.generation == debug_label_generation then
+		entry.data.text = text
+		entry.data.color = color
+		entry.data.text_size = size
+		return
+	end
+
+	if entry and entry.id then
+		Managers.event:trigger("remove_world_marker", entry.id)
+	end
+
+	local data = {
+		text = text,
+		color = color,
+		text_size = size,
+	}
+	local new_entry = {
+		id = nil,
+		data = data,
+		generation = debug_label_generation,
+	}
+	debug_label_markers[key] = new_entry
+
+	Managers.event:trigger("add_world_marker_position", RitualZonesDebugLabelMarker.name, position, function(marker_id)
+		new_entry.id = marker_id
+	end, data)
+end
+
 local function ensure_marker(unit, icon_size, color)
 	local entry = markers[unit]
 	if entry and entry.id and entry.generation == marker_generation then
 		entry.data.icon_size = icon_size
 		entry.data.color = color
-		entry.data.icon = MARKER_ICON
+		entry.data.icon = CONST.MARKER_ICON
 		return
 	end
 
@@ -900,7 +2600,7 @@ local function ensure_marker(unit, icon_size, color)
 	end
 
 	local data = {
-		icon = MARKER_ICON,
+		icon = CONST.MARKER_ICON,
 		icon_size = icon_size,
 		color = color,
 	}
@@ -925,6 +2625,11 @@ local function update_markers(ritual_units)
 		return
 	end
 
+	local through_walls = mod:get("marker_through_walls_enabled") or false
+	if RitualZonesMarker then
+		RitualZonesMarker.check_line_of_sight = not through_walls
+	end
+
 	if not mod:get("marker_enabled") then
 		clear_markers()
 		return
@@ -941,7 +2646,7 @@ local function update_markers(ritual_units)
 	for i = 1, #ritual_units do
 		local unit = ritual_units[i]
 		if unit_is_alive(unit) then
-			ensure_marker(unit, icon_size, MARKER_COLOR)
+			ensure_marker(unit, icon_size, CONST.MARKER_COLOR)
 			active[unit] = true
 		end
 	end
@@ -1194,6 +2899,11 @@ local function update_timer_markers(ritual_units, dt, t)
 		return
 	end
 
+	local through_walls = mod:get("marker_through_walls_enabled") or false
+	if RitualZonesTimerMarker then
+		RitualZonesTimerMarker.check_line_of_sight = not through_walls
+	end
+
 	if timer_dirty then
 		clear_timer_markers()
 		timer_dirty = false
@@ -1407,15 +3117,31 @@ local function get_debug_text_offset(label, scale)
 	if not Vector3 then
 		return nil
 	end
-	local offset = DEBUG_TEXT_OFFSETS[label]
+	local base_label = label
+	if base_label and base_label:find(" [", 1, true) then
+		base_label = base_label:gsub("%s%[[^%]]+%]$", "")
+	end
+	local offset = CONST.DEBUG_TEXT_OFFSETS[base_label]
+	if not offset and label and string.find(label, "Progress (", 1, true) then
+		offset = CONST.DEBUG_TEXT_OFFSETS["Progress"]
+	end
 	if not offset and label and string.find(label, "Pacing Spawn:", 1, true) then
-		offset = DEBUG_TEXT_OFFSETS["Pacing Spawn"]
+		offset = CONST.DEBUG_TEXT_OFFSETS["Pacing Spawn"]
+	end
+	if not offset and label and string.find(label, "Rescue Move Trigger", 1, true) then
+		offset = CONST.DEBUG_TEXT_OFFSETS["Rescue Move Trigger"]
+	end
+	if not offset and label and string.find(label, "Priority Move Trigger", 1, true) then
+		offset = CONST.DEBUG_TEXT_OFFSETS["Priority Move Trigger"]
+	end
+	if not offset and label and string.find(label, "Respawn Beacon", 1, true) then
+		offset = CONST.DEBUG_TEXT_OFFSETS["Respawn Beacon"]
 	end
 	if not offset then
 		return nil
 	end
 	local s = scale or 1
-	return Vector3(offset[1] * s, offset[2] * s, offset[3] * s)
+	return Vector3(offset[1] * s, offset[2] * s, offset[3] + debug_text_z_offset)
 end
 
 local function get_debug_text_position(base_position, label, height, scale)
@@ -1431,7 +3157,15 @@ local function get_debug_text_position(base_position, label, height, scale)
 end
 
 local function output_debug_text(debug_text, text, position, size, color_rgb)
-	if not debug_text or not position or not Vector3 then
+	if not position or not Vector3 then
+		return
+	end
+	if mod:get("debug_labels_through_walls") then
+		local key = build_debug_label_key(text, position)
+		ensure_debug_label_marker(key, text, position, size, color_rgb)
+		return
+	end
+	if not debug_text then
 		return
 	end
 
@@ -1442,6 +3176,1609 @@ local function output_debug_text(debug_text, text, position, size, color_rgb)
 		viewport_name = player and player.viewport_name
 	end
 	pcall(debug_text.output_world_text, debug_text, text, size, position, nil, "RitualZones", color, viewport_name)
+end
+
+local function strip_rich_text(text)
+	if not text then
+		return text
+	end
+	local cleaned = text:gsub("{#.-}", "")
+	cleaned = cleaned:gsub("^%s+", ""):gsub("%s+$", "")
+	return cleaned
+end
+
+get_player_name = function(player)
+	if not player or type(player.name) ~= "function" then
+		return nil
+	end
+	local ok, name = pcall(player.name, player)
+	if ok and name and name ~= "" then
+		return strip_rich_text(name)
+	end
+	return nil
+end
+
+local draw_main_path = nil
+local draw_sphere = nil
+local draw_gate_plane = nil
+local format_debug_label = nil
+
+local function get_debug_settings()
+	local settings = {}
+	settings.gate_enabled = mod:get("gate_enabled")
+	if settings.gate_enabled == nil then
+		settings.gate_enabled = true
+	end
+	settings.path_enabled = mod:get("path_enabled")
+	settings.debug_text_mode = debug_text_mode()
+	settings.debug_text_enabled = debug_text_enabled_mode(settings.debug_text_mode)
+	settings.debug_text_show_labels = debug_text_show_labels(settings.debug_text_mode)
+	settings.debug_text_show_distances = debug_text_show_distances(settings.debug_text_mode)
+	settings.debug_distance_enabled = settings.debug_text_show_distances
+	settings.debug_text_size = mod:get("debug_text_size") or 0.2
+	settings.debug_text_height = mod:get("debug_text_height") or 0.4
+	settings.debug_text_z_offset = mod:get("debug_text_z_offset") or 0
+	settings.debug_text_z_offset = math.floor(settings.debug_text_z_offset * 2 + 0.5) / 2
+	debug_text_z_offset = settings.debug_text_z_offset
+	settings.debug_draw_distance = mod:get("debug_draw_distance") or 0
+	settings.debug_text_offset_scale = math.max(0.15, settings.debug_text_size * 2)
+	settings.boss_trigger_spheres_enabled = mod:get("boss_trigger_spheres_enabled")
+	settings.boss_mutator_triggers_enabled = mod:get("boss_mutator_triggers_enabled")
+	settings.boss_twins_triggers_enabled = mod:get("boss_twins_triggers_enabled")
+	settings.twins_ambush_triggers_mode = mod:get("twins_ambush_triggers_mode")
+	settings.twins_spawn_triggers_mode = mod:get("twins_spawn_triggers_mode")
+	settings.boss_patrol_triggers_enabled = mod:get("boss_patrol_triggers_enabled")
+	settings.pacing_spawn_triggers_enabled = mod:get("pacing_spawn_triggers_enabled")
+	settings.ambush_trigger_spheres_enabled = mod:get("ambush_trigger_spheres_enabled")
+	settings.backtrack_trigger_sphere_enabled = mod:get("backtrack_trigger_sphere_enabled")
+	settings.cache_use_enabled = mod:get("cache_use_enabled")
+	settings.cache_use_offline_enabled = mod:get("cache_use_offline_enabled")
+	settings.respawn_progress_enabled = mod:get("respawn_progress_enabled")
+	settings.respawn_beacon_enabled = mod:get("respawn_beacon_enabled")
+	settings.priority_beacon_enabled = mod:get("priority_beacon_enabled")
+	settings.respawn_beacon_line_enabled = mod:get("respawn_beacon_line_enabled")
+	settings.respawn_threshold_enabled = mod:get("respawn_threshold_enabled")
+	settings.respawn_backline_enabled = mod:get("respawn_backline_enabled")
+	settings.respawn_move_triggers_mode = mod:get("respawn_move_triggers_enabled")
+	settings.priority_move_triggers_mode = mod:get("priority_move_triggers_enabled")
+	settings.trigger_points_enabled = mod:get("trigger_points_enabled")
+	settings.progress_point_enabled = mod:get("progress_point_enabled")
+	settings.path_height = mod:get("path_height") or 0.15
+	settings.progress_height = mod:get("progress_height") or 0.15
+	settings.sphere_radius_scale = mod:get("sphere_radius_scale") or 1
+	settings.gate_width = mod:get("gate_width") or 6
+	settings.gate_height = mod:get("gate_height") or 8
+	settings.gate_slices = mod:get("gate_slices") or 1
+	if settings.sphere_radius_scale < 0.05 then
+		settings.sphere_radius_scale = 0.05
+	end
+	settings.allow_live_data = is_server()
+	if settings.debug_draw_distance < 0 then
+		settings.debug_draw_distance = 0
+	end
+	if settings.boss_mutator_triggers_enabled == nil then
+		settings.boss_mutator_triggers_enabled = true
+	end
+	if settings.boss_twins_triggers_enabled == nil then
+		settings.boss_twins_triggers_enabled = true
+	end
+	if settings.twins_ambush_triggers_mode == nil then
+		settings.twins_ambush_triggers_mode = "always"
+	end
+	if settings.twins_spawn_triggers_mode == nil then
+		settings.twins_spawn_triggers_mode = "always"
+	end
+	if settings.boss_patrol_triggers_enabled == nil then
+		settings.boss_patrol_triggers_enabled = true
+	end
+	if settings.twins_spawn_triggers_mode ~= "always"
+		and settings.twins_spawn_triggers_mode ~= "off"
+		and settings.twins_spawn_triggers_mode ~= "until_spawn" then
+		settings.twins_spawn_triggers_mode = "always"
+	end
+	if settings.twins_ambush_triggers_mode ~= "always"
+		and settings.twins_ambush_triggers_mode ~= "off"
+		and settings.twins_ambush_triggers_mode ~= "until_spawn" then
+		settings.twins_ambush_triggers_mode = "always"
+	end
+	if settings.pacing_spawn_triggers_enabled == nil then
+		settings.pacing_spawn_triggers_enabled = false
+	end
+	if settings.ambush_trigger_spheres_enabled == nil then
+		settings.ambush_trigger_spheres_enabled = false
+	end
+	if settings.backtrack_trigger_sphere_enabled == nil then
+		settings.backtrack_trigger_sphere_enabled = false
+	end
+	if settings.respawn_threshold_enabled == nil then
+		settings.respawn_threshold_enabled = false
+	end
+	if settings.respawn_backline_enabled == nil then
+		settings.respawn_backline_enabled = false
+	end
+	if settings.respawn_beacon_line_enabled == nil then
+		settings.respawn_beacon_line_enabled = false
+	end
+	if settings.priority_beacon_enabled == nil then
+		settings.priority_beacon_enabled = false
+	end
+	if settings.cache_use_enabled == nil then
+		settings.cache_use_enabled = true
+	end
+	if settings.cache_use_offline_enabled == nil then
+		settings.cache_use_offline_enabled = false
+	end
+	if settings.respawn_move_triggers_mode == nil then
+		settings.respawn_move_triggers_mode = "off"
+	elseif settings.respawn_move_triggers_mode == true then
+		settings.respawn_move_triggers_mode = "hogtied"
+	elseif settings.respawn_move_triggers_mode == false then
+		settings.respawn_move_triggers_mode = "off"
+	end
+	if settings.priority_move_triggers_mode == nil then
+		settings.priority_move_triggers_mode = "off"
+	elseif settings.priority_move_triggers_mode == true then
+		settings.priority_move_triggers_mode = "hogtied"
+	elseif settings.priority_move_triggers_mode == false then
+		settings.priority_move_triggers_mode = "off"
+	end
+	if settings.respawn_move_triggers_mode ~= "off"
+		and settings.respawn_move_triggers_mode ~= "always"
+		and settings.respawn_move_triggers_mode ~= "hogtied" then
+		settings.respawn_move_triggers_mode = "off"
+	end
+	if settings.priority_move_triggers_mode ~= "off"
+		and settings.priority_move_triggers_mode ~= "always"
+		and settings.priority_move_triggers_mode ~= "hogtied" then
+		settings.priority_move_triggers_mode = "off"
+	end
+	if not settings.allow_live_data and not settings.cache_use_enabled then
+		settings.boss_trigger_spheres_enabled = false
+		settings.pacing_spawn_triggers_enabled = false
+		settings.ambush_trigger_spheres_enabled = false
+		settings.trigger_points_enabled = false
+	end
+	settings.show_any = settings.path_enabled
+		or settings.trigger_points_enabled
+		or settings.progress_point_enabled
+		or settings.boss_trigger_spheres_enabled
+		or settings.pacing_spawn_triggers_enabled
+		or settings.ambush_trigger_spheres_enabled
+		or settings.backtrack_trigger_sphere_enabled
+		or settings.respawn_progress_enabled
+		or settings.respawn_beacon_enabled
+		or settings.priority_beacon_enabled
+		or settings.respawn_beacon_line_enabled
+		or settings.respawn_threshold_enabled
+		or settings.respawn_backline_enabled
+		or settings.respawn_move_triggers_mode ~= "off"
+		or settings.priority_move_triggers_mode ~= "off"
+		or settings.debug_text_enabled
+	return settings
+end
+
+function build_debug_state(path_total)
+	local state = {}
+	state.path_total = path_total
+
+	local player = Managers.player and Managers.player:local_player(1)
+	local player_unit = player and player.player_unit
+	local player_distance = nil
+
+	if player_unit and unit_is_alive(player_unit) then
+		local player_position = get_unit_position(player_unit)
+		state.player_position = player_position
+		player_distance = get_position_travel_distance(player_position)
+		if not player_distance then
+			player_distance = get_unit_travel_distance(player_unit)
+		end
+	end
+	if path_total and player_distance then
+		player_distance = math.max(0, math.min(player_distance, path_total))
+	end
+	if player_distance and not is_finite_number(player_distance) then
+		player_distance = nil
+	end
+
+	local progress_entries, leader_distance, leader_player, local_distance = collect_player_progress(path_total)
+	if local_distance then
+		player_distance = local_distance
+	end
+	local progress_reference_distance = leader_distance or player_distance
+	if progress_reference_distance and (not max_progress_distance or progress_reference_distance > max_progress_distance) then
+		max_progress_distance = progress_reference_distance
+	end
+
+	local remove_distance = nil
+	if progress_reference_distance then
+		remove_distance = progress_reference_distance - TRIGGER_PAST_MARGIN
+	elseif Managers.state.main_path and Managers.state.main_path.ahead_unit then
+		local _, ahead_distance = Managers.state.main_path:ahead_unit(1)
+		if ahead_distance then
+			remove_distance = ahead_distance - TRIGGER_PAST_MARGIN
+		end
+	end
+	if path_total and remove_distance then
+		remove_distance = math.max(0, math.min(remove_distance, path_total))
+	end
+
+	state.player_distance = player_distance
+	state.progress_entries = progress_entries
+	state.leader_distance = leader_distance
+	state.leader_player = leader_player
+	state.progress_reference_distance = progress_reference_distance
+	state.remove_distance = remove_distance
+	state.max_progress_distance = max_progress_distance
+	local waiting_to_spawn, respawn_min_time = has_players_waiting_to_spawn()
+	state.respawn_waiting = waiting_to_spawn
+	state.respawn_min_time = respawn_min_time
+	state.hogtied_present = has_hogtied_players()
+	if Managers.state.main_path and Managers.state.main_path.ahead_unit then
+		local side_id = get_default_side_id()
+		if side_id then
+			local ok_ahead, _, ahead_distance = pcall(Managers.state.main_path.ahead_unit, Managers.state.main_path, side_id)
+			if ok_ahead then
+				state.ahead_distance = ahead_distance
+			end
+			local ok_behind, _, behind_distance = pcall(Managers.state.main_path.behind_unit, Managers.state.main_path, side_id)
+			if ok_behind then
+				state.behind_distance = behind_distance
+			end
+		end
+	end
+	state.alpha = 200
+
+	return state
+end
+
+function draw_debug_path(settings, state)
+	if not settings.path_enabled then
+		return
+	end
+	local path_color = Color(120, CONST.PATH_COLOR[1], CONST.PATH_COLOR[2], CONST.PATH_COLOR[3])
+	draw_main_path(
+		state.line_object,
+		path_color,
+		settings.path_height,
+		state.player_position,
+		settings.debug_draw_distance
+	)
+end
+
+function draw_debug_progress(settings, state)
+	if not settings.progress_point_enabled then
+		return
+	end
+	local progress_entries = state.progress_entries or {}
+	local progress_group_counts = {}
+	local progress_group_indices = {}
+
+	for i = 1, #progress_entries do
+		local distance = progress_entries[i].distance
+		if distance and is_finite_number(distance) then
+			local bucket = math.floor((distance / CONST.PROGRESS_STACK_STEP) + 0.5) * CONST.PROGRESS_STACK_STEP
+			progress_entries[i].stack_key = bucket
+			progress_group_counts[bucket] = (progress_group_counts[bucket] or 0) + 1
+		end
+	end
+
+	for i = 1, #progress_entries do
+		local entry = progress_entries[i]
+		local distance = entry.distance
+		if state.path_total then
+			distance = math.max(0, math.min(distance, state.path_total))
+		end
+		local progress_position = MainPathQueries.position_from_distance(distance)
+		if progress_position then
+			if not within_draw_distance(progress_position, settings, state) then
+				goto continue_progress
+			end
+			local is_leader = state.leader_player and entry.player == state.leader_player
+			local color_values = is_leader and CONST.RING_COLORS.purple or CONST.PROGRESS_COLOR
+			local alpha_value = entry.alive and 220 or 140
+			local color = Color(alpha_value, color_values[1], color_values[2], color_values[3])
+			local stack_key = entry.stack_key or distance or 0
+			local stack_index = (progress_group_indices[stack_key] or 0) + 1
+			progress_group_indices[stack_key] = stack_index
+			local stack_offset = (stack_index - 1) * CONST.PROGRESS_STACK_HEIGHT * settings.sphere_radius_scale
+			local position = progress_position
+				+ Vector3(0, 0, settings.path_height + settings.progress_height + stack_offset)
+			draw_sphere(state.line_object, position, 0.4 * settings.sphere_radius_scale, 20, color)
+			if settings.debug_text_enabled then
+				local label = nil
+				local label_color = color_values
+				if is_leader then
+					label = "Progress (Leader)"
+					label_color = CONST.RING_COLORS.purple
+				elseif entry.is_local then
+					label = "Progress (You)"
+					label_color = CONST.PROGRESS_COLOR
+				else
+					local name = get_player_name(entry.player)
+					if name then
+						label = string.format("Progress (%s)", tostring(name))
+						label_color = CONST.PROGRESS_COLOR
+					end
+				end
+				if label then
+					local label_text = format_debug_label(
+						label,
+						distance,
+						settings.debug_text_show_distances,
+						settings.debug_text_show_labels
+					)
+					if label_text then
+						local text_position = get_debug_text_position(
+							position,
+							label,
+							settings.debug_text_height,
+							settings.debug_text_offset_scale
+						)
+						output_debug_text(
+							state.debug_text,
+							label_text,
+							text_position,
+							settings.debug_text_size,
+							label_color
+						)
+					end
+				end
+			end
+		end
+		::continue_progress::
+	end
+
+	if state.max_progress_distance then
+		local max_position = MainPathQueries.position_from_distance(state.max_progress_distance)
+		if max_position then
+			if not within_draw_distance(max_position, settings, state) then
+				return
+			end
+			local max_offset = 0
+			if state.leader_distance and math.abs(state.max_progress_distance - state.leader_distance) < 0.05 then
+				max_offset = CONST.MAX_PROGRESS_HEIGHT_OFFSET
+			end
+			local max_stack_offset = 0
+			local max_bucket = math.floor((state.max_progress_distance / CONST.PROGRESS_STACK_STEP) + 0.5) * CONST.PROGRESS_STACK_STEP
+			local group_count = progress_group_counts[max_bucket] or 0
+			if group_count > 0 then
+				max_stack_offset = group_count * CONST.PROGRESS_STACK_HEIGHT * settings.sphere_radius_scale
+			end
+			local max_color = Color(220, CONST.PROGRESS_MAX_COLOR[1], CONST.PROGRESS_MAX_COLOR[2], CONST.PROGRESS_MAX_COLOR[3])
+			local position = max_position
+				+ Vector3(
+					0,
+					0,
+					settings.path_height + settings.progress_height + max_offset + max_stack_offset
+				)
+			draw_sphere(state.line_object, position, 0.5 * settings.sphere_radius_scale, 20, max_color)
+			if settings.debug_text_enabled then
+				local base_label = "Max Progress"
+				local label_text = format_debug_label(
+					base_label,
+					state.max_progress_distance,
+					settings.debug_text_show_distances,
+					settings.debug_text_show_labels
+				)
+				if label_text then
+					local text_position = get_debug_text_position(
+						position,
+						base_label,
+						settings.debug_text_height,
+						settings.debug_text_offset_scale
+					)
+					output_debug_text(
+						state.debug_text,
+						label_text,
+						text_position,
+						settings.debug_text_size,
+						CONST.PROGRESS_MAX_COLOR
+					)
+				end
+			end
+		end
+	end
+end
+
+function draw_debug_boss_triggers(settings, state)
+	if not settings.boss_trigger_spheres_enabled then
+		return
+	end
+	local boss_triggers = collect_boss_triggers({
+		mutator = settings.boss_mutator_triggers_enabled,
+		twins = settings.boss_twins_triggers_enabled,
+		boss_patrols = settings.boss_patrol_triggers_enabled,
+	})
+	if #boss_triggers == 0 and state.cache_entry then
+		boss_triggers = cached_boss_triggers(state.cache_entry)
+	end
+	if #boss_triggers == 0 then
+		return
+	end
+	local twins_spawn_mode = settings.twins_spawn_triggers_mode or "always"
+	local twins_ambush_mode = settings.twins_ambush_triggers_mode or "always"
+	local twins_spawned = (twins_spawn_mode == "until_spawn" or twins_ambush_mode == "until_spawn")
+		and is_twins_spawned()
+		or false
+	local twins_counts = {}
+	local twins_indices = {}
+	for i = 1, #boss_triggers do
+		local trigger = boss_triggers[i]
+		if trigger.label == "Twins Ambush Trigger" then
+			local distance_key = string.format("twins_dist:%.2f", trigger.distance or 0)
+			twins_counts[distance_key] = (twins_counts[distance_key] or 0) + 1
+		end
+	end
+	for i = 1, #boss_triggers do
+		local trigger = boss_triggers[i]
+		local distance = trigger.distance
+		if distance and state.path_total then
+			distance = math.max(0, math.min(distance, state.path_total))
+		end
+		if trigger.label == "Twins Spawn Trigger" then
+			if twins_spawn_mode == "off" then
+				goto continue_boss
+			elseif twins_spawn_mode == "until_spawn" then
+				local spawned = twins_spawned
+				if not spawned and state.progress_reference_distance and distance then
+					spawned = distance <= state.progress_reference_distance
+				end
+				if spawned then
+					goto continue_boss
+				end
+			end
+		elseif trigger.label == "Twins Ambush Trigger" then
+			if twins_ambush_mode == "off" then
+				goto continue_boss
+			elseif twins_ambush_mode == "until_spawn" then
+				local spawned = twins_spawned
+				if not spawned and state.progress_reference_distance and distance then
+					spawned = distance <= state.progress_reference_distance
+				end
+				if spawned then
+					goto continue_boss
+				end
+			end
+		end
+		local position = distance and MainPathQueries.position_from_distance(distance)
+		if position then
+			if trigger.label == "Twins Ambush Trigger" then
+				local distance_key = string.format("twins_dist:%.2f", distance or 0)
+				local group_count = twins_counts[distance_key] or 1
+				local group_index = (twins_indices[distance_key] or 0) + 1
+				twins_indices[distance_key] = group_index
+				if group_count > 1 then
+					local direction = main_path_direction(distance)
+					local right = direction and Vector3.cross(Vector3.up(), direction)
+					if not right or Vector3.length(right) < 0.001 then
+						right = Vector3(1, 0, 0)
+					end
+					right = Vector3.normalize(right)
+					local step = (CONST.BOSS_TRIGGER_RADIUS * 2.2) * settings.sphere_radius_scale
+					local centered_index = group_index - (group_count + 1) * 0.5
+					position = position + right * (step * centered_index)
+				end
+			end
+			local key = trigger.key or string.format("boss:%.2f", distance or 0)
+			local passed = boss_triggered[key]
+				or (state.progress_reference_distance and distance and distance <= state.progress_reference_distance)
+			if passed and not boss_triggered[key] then
+				boss_triggered[key] = true
+			end
+			local color_rgb = passed and CONST.MARKER_COLOR or CONST.BOSS_TRIGGER_COLOR
+			local boss_color = Color(220, color_rgb[1], color_rgb[2], color_rgb[3])
+			local radius = CONST.BOSS_TRIGGER_RADIUS * settings.sphere_radius_scale
+			local sphere_position = position + Vector3(0, 0, settings.path_height + radius)
+			if not within_draw_distance(sphere_position, settings, state) then
+				goto continue_boss
+			end
+			draw_sphere(state.line_object, sphere_position, radius, 18, boss_color)
+			if settings.debug_text_enabled then
+				local base_label = trigger.label or "Boss Trigger"
+				local label_text = format_debug_label(
+					base_label,
+					distance,
+					settings.debug_text_show_distances,
+					settings.debug_text_show_labels
+				)
+				if label_text then
+					local text_position = get_debug_text_position(
+						sphere_position,
+						base_label,
+						settings.debug_text_height,
+						settings.debug_text_offset_scale
+					)
+					output_debug_text(
+						state.debug_text,
+						label_text,
+						text_position,
+						settings.debug_text_size,
+						color_rgb
+					)
+				end
+			end
+		end
+		::continue_boss::
+	end
+end
+
+function draw_debug_pacing_triggers(settings, state)
+	if not settings.pacing_spawn_triggers_enabled then
+		return
+	end
+	local pacing_triggers = collect_pacing_spawn_triggers()
+	if #pacing_triggers == 0 and state.cache_entry then
+		pacing_triggers = cached_pacing_triggers(state.cache_entry)
+	end
+	if #pacing_triggers == 0 then
+		return
+	end
+	local pacing_counts = {}
+	local pacing_indices = {}
+	for i = 1, #pacing_triggers do
+		local distance = pacing_triggers[i].distance
+		local distance_key = string.format("pacing_dist:%.2f", distance or 0)
+		pacing_counts[distance_key] = (pacing_counts[distance_key] or 0) + 1
+	end
+	for i = 1, #pacing_triggers do
+		local trigger = pacing_triggers[i]
+		local distance = trigger.distance
+		if distance and state.path_total then
+			distance = math.max(0, math.min(distance, state.path_total))
+		end
+		local distance_key = string.format("pacing_dist:%.2f", distance or 0)
+		local group_count = pacing_counts[distance_key] or 1
+		local group_index = (pacing_indices[distance_key] or 0) + 1
+		pacing_indices[distance_key] = group_index
+		local position = distance and MainPathQueries.position_from_distance(distance)
+		if position then
+			if group_count > 1 then
+				local direction = main_path_direction(distance)
+				local right = direction and Vector3.cross(Vector3.up(), direction)
+				if not right or Vector3.length(right) < 0.001 then
+					right = Vector3(1, 0, 0)
+				end
+				right = Vector3.normalize(right)
+				local step = (CONST.TRIGGER_POINT_RADIUS * 2.2) * settings.sphere_radius_scale
+				local centered_index = group_index - (group_count + 1) * 0.5
+				position = position + right * (step * centered_index)
+			end
+			local key = trigger.key or string.format("pacing:%.2f", distance or 0)
+			local passed = pacing_triggered[key]
+				or (state.progress_reference_distance and distance and distance <= state.progress_reference_distance)
+			if passed and not pacing_triggered[key] then
+				pacing_triggered[key] = true
+			end
+			local color_rgb = passed and CONST.MARKER_COLOR or CONST.PACING_TRIGGER_COLOR
+			local pace_color = Color(200, color_rgb[1], color_rgb[2], color_rgb[3])
+			local radius = CONST.TRIGGER_POINT_RADIUS * settings.sphere_radius_scale
+			local sphere_position = position + Vector3(0, 0, settings.path_height + radius)
+			if not within_draw_distance(sphere_position, settings, state) then
+				goto continue_pacing
+			end
+			draw_sphere(state.line_object, sphere_position, radius, 16, pace_color)
+			if settings.debug_text_enabled then
+				local base_label = trigger.label or "Pacing Spawn"
+				local label_text = format_debug_label(
+					base_label,
+					distance,
+					settings.debug_text_show_distances,
+					settings.debug_text_show_labels
+				)
+				if label_text then
+					local text_position = get_debug_text_position(
+						sphere_position,
+						base_label,
+						settings.debug_text_height,
+						settings.debug_text_offset_scale
+					)
+					output_debug_text(
+						state.debug_text,
+						label_text,
+						text_position,
+						settings.debug_text_size,
+						color_rgb
+					)
+				end
+			end
+		end
+		::continue_pacing::
+	end
+end
+
+function draw_debug_ambush_triggers(settings, state)
+	if not settings.ambush_trigger_spheres_enabled then
+		return
+	end
+	local ambush_triggers = {}
+	if settings.allow_live_data then
+		ambush_triggers = collect_ambush_triggers()
+	end
+	if #ambush_triggers == 0 and state.cache_entry then
+		ambush_triggers = cached_ambush_triggers(state.cache_entry)
+	end
+	if #ambush_triggers == 0 then
+		return
+	end
+	local ambush_counts = {}
+	local ambush_indices = {}
+	for i = 1, #ambush_triggers do
+		local distance = ambush_triggers[i].distance
+		local distance_key = string.format("ambush_dist:%.2f", distance or 0)
+		ambush_counts[distance_key] = (ambush_counts[distance_key] or 0) + 1
+	end
+	for i = 1, #ambush_triggers do
+		local trigger = ambush_triggers[i]
+		local distance = trigger.distance
+		if distance and state.path_total then
+			distance = math.max(0, math.min(distance, state.path_total))
+		end
+		local distance_key = string.format("ambush_dist:%.2f", distance or 0)
+		local group_count = ambush_counts[distance_key] or 1
+		local group_index = (ambush_indices[distance_key] or 0) + 1
+		ambush_indices[distance_key] = group_index
+		local position = distance and MainPathQueries.position_from_distance(distance)
+		if position then
+			if group_count > 1 then
+				local direction = main_path_direction(distance)
+				local right = direction and Vector3.cross(Vector3.up(), direction)
+				if not right or Vector3.length(right) < 0.001 then
+					right = Vector3(1, 0, 0)
+				end
+				right = Vector3.normalize(right)
+				local step = (CONST.TRIGGER_POINT_RADIUS * 2.2) * settings.sphere_radius_scale
+				local centered_index = group_index - (group_count + 1) * 0.5
+				position = position + right * (step * centered_index)
+			end
+			local key = trigger.key or string.format("ambush:%.2f", distance or 0)
+			local passed = ambush_triggered[key]
+				or (state.progress_reference_distance and distance and distance <= state.progress_reference_distance)
+			if passed and not ambush_triggered[key] then
+				ambush_triggered[key] = true
+			end
+			local color_rgb = passed and CONST.MARKER_COLOR or CONST.AMBUSH_TRIGGER_COLOR
+			local radius = CONST.TRIGGER_POINT_RADIUS * settings.sphere_radius_scale
+			local sphere_position = position + Vector3(0, 0, settings.path_height + radius)
+			if not within_draw_distance(sphere_position, settings, state) then
+				goto continue_ambush
+			end
+			draw_sphere(state.line_object, sphere_position, radius, 18, Color(220, color_rgb[1], color_rgb[2], color_rgb[3]))
+			if settings.debug_text_enabled then
+				local base_label = trigger.label or "Ambush Horde Trigger"
+				local label_text = format_debug_label(
+					base_label,
+					distance,
+					settings.debug_text_show_distances,
+					settings.debug_text_show_labels
+				)
+				if label_text then
+					local text_position = get_debug_text_position(
+						sphere_position,
+						base_label,
+						settings.debug_text_height,
+						settings.debug_text_offset_scale
+					)
+					output_debug_text(
+						state.debug_text,
+						label_text,
+						text_position,
+						settings.debug_text_size,
+						color_rgb
+					)
+				end
+			end
+		end
+		::continue_ambush::
+	end
+end
+
+function draw_debug_backtrack_trigger(settings, state)
+	if not settings.backtrack_trigger_sphere_enabled then
+		return
+	end
+	local trigger_distance = get_backtrack_trigger_distance(state.path_total)
+	if not trigger_distance then
+		return
+	end
+	local position = MainPathQueries.position_from_distance(trigger_distance)
+	if not position then
+		return
+	end
+	local passed = state.progress_reference_distance
+		and trigger_distance
+		and state.progress_reference_distance <= trigger_distance
+	local color_rgb = passed and CONST.MARKER_COLOR or CONST.BACKTRACK_TRIGGER_COLOR
+	local radius = CONST.TRIGGER_POINT_RADIUS * settings.sphere_radius_scale
+	local sphere_position = position + Vector3(0, 0, settings.path_height + radius)
+	if not within_draw_distance(sphere_position, settings, state) then
+		return
+	end
+	draw_sphere(state.line_object, sphere_position, radius, 18, Color(220, color_rgb[1], color_rgb[2], color_rgb[3]))
+	if settings.debug_text_enabled then
+		local base_label = "Backtrack Horde Trigger"
+		local label_text = format_debug_label(
+			base_label,
+			trigger_distance,
+			settings.debug_text_show_distances,
+			settings.debug_text_show_labels
+		)
+		if label_text then
+			local text_position = get_debug_text_position(
+				sphere_position,
+				base_label,
+				settings.debug_text_height,
+				settings.debug_text_offset_scale
+			)
+			output_debug_text(
+				state.debug_text,
+				label_text,
+				text_position,
+				settings.debug_text_size,
+				color_rgb
+			)
+		end
+	end
+end
+
+function draw_debug_respawn_points(settings, state)
+	if not settings.respawn_progress_enabled
+		and not settings.respawn_beacon_enabled
+		and settings.respawn_move_triggers_mode == "off" then
+		return
+	end
+
+	local respawn_distances = {}
+	if settings.respawn_progress_enabled or settings.respawn_beacon_enabled then
+		respawn_distances = collect_respawn_progress_distances()
+	end
+
+	if settings.respawn_progress_enabled then
+		local use_distances = respawn_distances
+		if #respawn_distances == 0 and state.cache_entry then
+			use_distances = cached_respawn_distances(state.cache_entry)
+		end
+		local respawn_system = Managers.state.extension and Managers.state.extension:system("respawn_beacon_system")
+		local active_unit = respawn_system and respawn_system._current_active_respawn_beacon
+		local active_distance = nil
+		if active_unit and respawn_system then
+			local lookup = respawn_system._beacon_main_path_distance_lookup
+			if lookup then
+				active_distance = lookup[active_unit]
+			end
+			if not active_distance then
+				local beacon_data = respawn_system._beacon_main_path_data
+				if beacon_data then
+					for i = 1, #beacon_data do
+						local data = beacon_data[i]
+						if data and data.unit == active_unit then
+							active_distance = data.distance
+							break
+						end
+					end
+				end
+			end
+		end
+		local active_progress_distance = active_distance
+			and (active_distance - CONST.RESPAWN_BEACON_AHEAD_DISTANCE)
+		if active_progress_distance and state.path_total then
+			active_progress_distance = math.max(0, math.min(active_progress_distance, state.path_total))
+		end
+		if not active_progress_distance and use_distances and #use_distances > 0 then
+			local reference_distance =
+				state.ahead_distance or state.progress_reference_distance or state.player_distance
+			local best_distance = nil
+			if reference_distance then
+				for i = 1, #use_distances do
+					local candidate = use_distances[i]
+					if candidate and candidate >= reference_distance then
+						if not best_distance or candidate < best_distance then
+							best_distance = candidate
+						end
+					end
+				end
+			end
+			if not best_distance then
+				for i = 1, #use_distances do
+					local candidate = use_distances[i]
+					if candidate and is_finite_number(candidate) then
+						if not best_distance or candidate > best_distance then
+							best_distance = candidate
+						end
+					end
+				end
+			end
+			if best_distance and state.path_total then
+				best_distance = math.max(0, math.min(best_distance, state.path_total))
+			end
+			active_progress_distance = best_distance
+		end
+		local waiting_to_spawn = state.respawn_waiting
+		local warn_active = waiting_to_spawn and not state.hogtied_present
+		local min_respawn_time = state.respawn_min_time
+		for i = 1, #use_distances do
+			local distance = use_distances[i]
+			if distance and state.path_total then
+				distance = math.max(0, math.min(distance, state.path_total))
+			end
+			local passed = state.progress_reference_distance and distance and distance <= state.progress_reference_distance
+			local position = distance and MainPathQueries.position_from_distance(distance)
+			if position then
+				local color_rgb = passed and CONST.MARKER_COLOR or CONST.RESPAWN_PROGRESS_COLOR
+				local warn_status = nil
+				if warn_active
+					and active_progress_distance
+					and distance
+					and math.abs(distance - active_progress_distance) <= CACHE.DISTANCE_TOLERANCE then
+					local reference_distance = state.progress_reference_distance
+						or state.ahead_distance
+						or state.player_distance
+					local crossed = reference_distance and reference_distance > distance
+					if crossed then
+						warn_status = "Return"
+						color_rgb = CONST.RING_COLORS.red
+					else
+						warn_status = "Do Not Cross"
+						color_rgb = CONST.RESPAWN_PROGRESS_COLOR
+					end
+				end
+				local respawn_color = Color(220, color_rgb[1], color_rgb[2], color_rgb[3])
+				local radius = CONST.RESPAWN_PROGRESS_RADIUS * settings.sphere_radius_scale
+				local sphere_position = position + Vector3(0, 0, settings.path_height + radius)
+				if not within_draw_distance(sphere_position, settings, state) then
+					goto continue_respawn
+				end
+				draw_sphere(state.line_object, sphere_position, radius, 18, respawn_color)
+				if settings.debug_text_enabled then
+					local base_label = "Respawn Progress"
+					local label_key = warn_status and "Respawn Progress Warning" or base_label
+					if warn_status then
+						if min_respawn_time and is_finite_number(min_respawn_time) then
+							base_label = string.format(
+								"%s (%s %.0fs)",
+								base_label,
+								warn_status,
+								math.max(0, min_respawn_time)
+							)
+						else
+							base_label = string.format("%s (%s)", base_label, warn_status)
+						end
+					end
+					local label_text = format_debug_label(
+						base_label,
+						distance,
+						settings.debug_text_show_distances,
+						settings.debug_text_show_labels
+					)
+					if label_text then
+						local text_position = get_debug_text_position(
+							sphere_position,
+							label_key,
+							settings.debug_text_height,
+							settings.debug_text_offset_scale
+						)
+						output_debug_text(
+							state.debug_text,
+							label_text,
+							text_position,
+							settings.debug_text_size,
+							color_rgb
+						)
+					end
+				end
+			end
+			::continue_respawn::
+		end
+	end
+
+	if settings.respawn_beacon_enabled then
+		local fallback_distances = respawn_distances or {}
+		if #fallback_distances == 0 and state.cache_entry then
+			fallback_distances = cached_respawn_distances(state.cache_entry)
+		end
+		local beacon_entries = collect_respawn_beacon_entries(state.path_total, fallback_distances)
+		if #beacon_entries > 0 then
+			local respawn_system = Managers.state.extension and Managers.state.extension:system("respawn_beacon_system")
+			local priority_unit = get_priority_respawn_beacon_unit(respawn_system)
+			local active_unit = respawn_system and respawn_system._current_active_respawn_beacon
+			if active_unit then
+				last_active_respawn_beacon = active_unit
+			end
+			for i = 1, #beacon_entries do
+				local entry = beacon_entries[i]
+				local position = entry.position
+				local distance = entry.distance
+				if position then
+					local color_rgb = CONST.RESPAWN_BEACON_COLOR
+					local base_label = "Respawn Beacon"
+					if entry.priority or (entry.unit and entry.unit == priority_unit) then
+						color_rgb = CONST.MARKER_COLOR
+						base_label = "Respawn Beacon (Priority)"
+					elseif entry.unit and entry.unit == active_unit then
+						color_rgb = CONST.PROGRESS_COLOR
+						base_label = "Respawn Beacon (Active)"
+						last_active_respawn_beacon_distance = distance
+					elseif entry.unit
+						and last_active_respawn_beacon
+						and entry.unit == last_active_respawn_beacon then
+						color_rgb = CONST.PROGRESS_COLOR
+						base_label = "Respawn Beacon (Last Active)"
+					elseif not entry.unit
+						and last_active_respawn_beacon_distance
+						and distance
+						and math.abs(distance - last_active_respawn_beacon_distance) <= 0.2 then
+						color_rgb = CONST.PROGRESS_COLOR
+						base_label = "Respawn Beacon (Last Active)"
+					end
+					local beacon_color = Color(220, color_rgb[1], color_rgb[2], color_rgb[3])
+					local radius = CONST.RESPAWN_PROGRESS_RADIUS * settings.sphere_radius_scale
+					local sphere_position = position + Vector3(0, 0, settings.path_height + radius)
+					if within_draw_distance(sphere_position, settings, state) then
+						draw_sphere(state.line_object, sphere_position, radius, 18, beacon_color)
+						if settings.debug_text_enabled then
+							local label_text = format_debug_label(
+								base_label,
+								distance,
+								settings.debug_text_show_distances,
+								settings.debug_text_show_labels
+							)
+							if label_text then
+								local text_position = get_debug_text_position(
+									sphere_position,
+									base_label,
+									settings.debug_text_height,
+									settings.debug_text_offset_scale
+								)
+								output_debug_text(
+									state.debug_text,
+									label_text,
+									text_position,
+									settings.debug_text_size,
+									color_rgb
+								)
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	if settings.priority_beacon_enabled then
+		local respawn_system = Managers.state.extension and Managers.state.extension:system("respawn_beacon_system")
+		local priority_unit = get_priority_respawn_beacon_unit(respawn_system)
+		local priority_position = nil
+		local priority_distance = get_priority_respawn_beacon_distance(respawn_system, priority_unit)
+		if priority_unit and Unit and Unit.world_position then
+			local ok, position = pcall(Unit.world_position, priority_unit, 1)
+			if ok and position then
+				priority_position = position
+				if not priority_distance then
+					priority_distance = get_position_travel_distance(position)
+				end
+			end
+		end
+		if not priority_position and priority_distance then
+			priority_position = MainPathQueries.position_from_distance(priority_distance)
+		end
+		if priority_position then
+			local radius = CONST.RESPAWN_PROGRESS_RADIUS * settings.sphere_radius_scale
+			local sphere_position = priority_position + Vector3(0, 0, settings.path_height + radius)
+			if within_draw_distance(sphere_position, settings, state) then
+				local color_rgb = CONST.RING_COLORS.orange
+				draw_sphere(
+					state.line_object,
+					sphere_position,
+					radius,
+					18,
+					Color(220, color_rgb[1], color_rgb[2], color_rgb[3])
+				)
+				if settings.debug_text_enabled then
+					local base_label = "Priority Respawn Beacon"
+					local label_text = format_debug_label(
+						base_label,
+						priority_distance,
+						settings.debug_text_show_distances,
+						settings.debug_text_show_labels
+					)
+					if label_text then
+						local text_position = get_debug_text_position(
+							sphere_position,
+							base_label,
+							settings.debug_text_height,
+							settings.debug_text_offset_scale
+						)
+						output_debug_text(
+							state.debug_text,
+							label_text,
+							text_position,
+							settings.debug_text_size,
+							color_rgb
+						)
+					end
+				end
+			end
+		end
+	end
+	if settings.respawn_beacon_line_enabled and state.player_position then
+		local respawn_system = Managers.state.extension and Managers.state.extension:system("respawn_beacon_system")
+		local active_unit = respawn_system and respawn_system._current_active_respawn_beacon
+		local active_position = nil
+		if active_unit and Unit and Unit.world_position then
+			local ok, position = pcall(Unit.world_position, active_unit, 1)
+			if ok and position then
+				active_position = position
+			end
+		end
+		if not active_position and active_unit and respawn_system then
+			local active_distance = nil
+			local lookup = respawn_system._beacon_main_path_distance_lookup
+			if lookup then
+				active_distance = lookup[active_unit]
+			end
+			if not active_distance then
+				local beacon_data = respawn_system._beacon_main_path_data
+				if beacon_data then
+					for i = 1, #beacon_data do
+						local data = beacon_data[i]
+						if data and data.unit == active_unit then
+							active_distance = data.distance
+							break
+						end
+					end
+				end
+			end
+			if active_distance then
+				active_position = MainPathQueries.position_from_distance(active_distance)
+			end
+		end
+		if active_position and within_draw_distance(active_position, settings, state) then
+			local radius = CONST.RESPAWN_PROGRESS_RADIUS * settings.sphere_radius_scale
+			local offset = Vector3(0, 0, settings.path_height + radius)
+			local from = state.player_position + offset
+			local to = active_position + offset
+			local color_rgb = CONST.PROGRESS_COLOR
+			local color = Color(200, color_rgb[1], color_rgb[2], color_rgb[3])
+			pcall(LineObject.add_line, state.line_object, color, from, to)
+		end
+	end
+
+	if settings.respawn_threshold_enabled then
+		local threshold_distance = state.ahead_distance and (state.ahead_distance + CONST.RESPAWN_BEACON_AHEAD_DISTANCE)
+		if threshold_distance and state.path_total then
+			threshold_distance = math.max(0, math.min(threshold_distance, state.path_total))
+		end
+		if threshold_distance then
+			local position = MainPathQueries.position_from_distance(threshold_distance)
+			if position then
+				local color_rgb = CONST.MARKER_COLOR
+				local radius = CONST.RESPAWN_PROGRESS_RADIUS * settings.sphere_radius_scale
+				local sphere_position = position + Vector3(0, 0, settings.path_height + radius)
+				if within_draw_distance(sphere_position, settings, state) then
+					draw_sphere(
+						state.line_object,
+						sphere_position,
+						radius,
+						18,
+						Color(220, color_rgb[1], color_rgb[2], color_rgb[3])
+					)
+					if settings.debug_text_enabled then
+						local base_label = "Respawn Beacon Threshold"
+						local label_text = format_debug_label(
+							base_label,
+							threshold_distance,
+							settings.debug_text_show_distances,
+							settings.debug_text_show_labels
+						)
+						if label_text then
+							local text_position = get_debug_text_position(
+								sphere_position,
+								base_label,
+								settings.debug_text_height,
+								settings.debug_text_offset_scale
+							)
+							output_debug_text(
+								state.debug_text,
+								label_text,
+								text_position,
+								settings.debug_text_size,
+								color_rgb
+							)
+						end
+					end
+				end
+			end
+		end
+
+		local rewind_threshold = nil
+		local beacon_distances = nil
+		local respawn_system = Managers.state.extension and Managers.state.extension:system("respawn_beacon_system")
+		local beacon_data = respawn_system and respawn_system._beacon_main_path_data
+		if beacon_data and #beacon_data > 0 then
+			beacon_distances = {}
+			for i = 1, #beacon_data do
+				local data = beacon_data[i]
+				if data and data.distance then
+					beacon_distances[#beacon_distances + 1] = data.distance
+				end
+			end
+		elseif respawn_distances and #respawn_distances > 0 then
+			beacon_distances = {}
+			for i = 1, #respawn_distances do
+				local progress_distance = respawn_distances[i]
+				if progress_distance and is_finite_number(progress_distance) then
+					beacon_distances[#beacon_distances + 1] =
+						progress_distance + CONST.RESPAWN_BEACON_AHEAD_DISTANCE
+				end
+			end
+			table.sort(beacon_distances)
+		end
+
+		local active_unit = respawn_system and respawn_system._current_active_respawn_beacon
+		local active_distance = nil
+		if beacon_distances then
+			if active_unit and respawn_system and respawn_system._beacon_main_path_distance_lookup then
+				active_distance = respawn_system._beacon_main_path_distance_lookup[active_unit]
+			end
+			if active_unit and not active_distance and beacon_data then
+				for i = 1, #beacon_data do
+					local data = beacon_data[i]
+					if data and data.unit == active_unit then
+						active_distance = data.distance
+						break
+					end
+				end
+			end
+
+			local chosen_index = nil
+			if active_distance then
+				for i = 1, #beacon_distances do
+					if math.abs(beacon_distances[i] - active_distance) <= 0.1 then
+						chosen_index = i
+						break
+					end
+				end
+			elseif state.ahead_distance then
+				local min_distance = state.ahead_distance + CONST.RESPAWN_BEACON_AHEAD_DISTANCE
+				for i = 1, #beacon_distances do
+					if min_distance < beacon_distances[i] or i == #beacon_distances then
+						chosen_index = i
+						break
+					end
+				end
+			end
+
+			if chosen_index and chosen_index > 1 then
+				rewind_threshold = beacon_distances[chosen_index - 1] - CONST.RESPAWN_BEACON_AHEAD_DISTANCE
+				if state.path_total then
+					rewind_threshold = math.max(0, math.min(rewind_threshold, state.path_total))
+				end
+			end
+		end
+
+		if rewind_threshold then
+			local position = MainPathQueries.position_from_distance(rewind_threshold)
+			if position then
+				local waiting_to_spawn = state.respawn_waiting
+				local warn_active = waiting_to_spawn and not state.hogtied_present
+				local min_respawn_time = state.respawn_min_time
+				if warn_active and not respawn_waiting_active then
+					respawn_rewind_crossed = false
+					respawn_rewind_lost = false
+				elseif not warn_active and respawn_waiting_active then
+					respawn_rewind_lost = respawn_rewind_crossed and true or false
+				end
+				respawn_waiting_active = warn_active
+
+				local reference_distance = state.progress_reference_distance or state.ahead_distance or state.player_distance
+				local crossed = reference_distance and reference_distance > rewind_threshold
+				local show_threshold = warn_active or respawn_rewind_lost
+				local status = nil
+				local color_rgb = nil
+
+				if warn_active then
+					if crossed then
+						status = "Return"
+						color_rgb = CONST.RING_COLORS.red
+						respawn_rewind_crossed = true
+					else
+						status = "Safe"
+						color_rgb = CONST.RESPAWN_PROGRESS_COLOR
+						respawn_rewind_crossed = false
+					end
+				elseif respawn_rewind_lost then
+					status = "Lost"
+					color_rgb = { 255, 255, 255 }
+				end
+
+				if show_threshold and status and color_rgb then
+					local radius = CONST.RESPAWN_PROGRESS_RADIUS * settings.sphere_radius_scale
+					local sphere_position = position + Vector3(0, 0, settings.path_height + radius)
+					if within_draw_distance(sphere_position, settings, state) then
+						draw_sphere(
+							state.line_object,
+							sphere_position,
+							radius,
+							18,
+							Color(220, color_rgb[1], color_rgb[2], color_rgb[3])
+						)
+						if settings.debug_text_enabled then
+						local base_label = "Respawn Rewind Threshold"
+						if min_respawn_time and is_finite_number(min_respawn_time) and status ~= "Lost" then
+							base_label = string.format(
+								"%s (%s %.0fs)",
+								base_label,
+								status,
+								math.max(0, min_respawn_time)
+							)
+						else
+							base_label = string.format("%s (%s)", base_label, status)
+						end
+						local label_text = format_debug_label(
+							base_label,
+							rewind_threshold,
+							settings.debug_text_show_distances,
+							settings.debug_text_show_labels
+						)
+							if label_text then
+								local text_position = get_debug_text_position(
+									sphere_position,
+									base_label,
+									settings.debug_text_height,
+									settings.debug_text_offset_scale
+								)
+								output_debug_text(
+									state.debug_text,
+									label_text,
+									text_position,
+									settings.debug_text_size,
+									color_rgb
+								)
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	if settings.respawn_move_triggers_mode ~= "off" then
+		local move_triggers = collect_hogtied_move_triggers(
+			state.path_total,
+			settings.respawn_move_triggers_mode
+		)
+		if #move_triggers > 0 then
+			local move_counts = {}
+			local move_indices = {}
+			for i = 1, #move_triggers do
+				local distance_key = string.format("move:%.2f", move_triggers[i].distance or 0)
+				move_counts[distance_key] = (move_counts[distance_key] or 0) + 1
+			end
+			for i = 1, #move_triggers do
+				local trigger = move_triggers[i]
+				local distance = trigger.distance
+				if distance and state.path_total then
+					distance = math.max(0, math.min(distance, state.path_total))
+				end
+				local distance_key = string.format("move:%.2f", distance or 0)
+				local group_count = move_counts[distance_key] or 1
+				local group_index = (move_indices[distance_key] or 0) + 1
+				move_indices[distance_key] = group_index
+				local position = distance and MainPathQueries.position_from_distance(distance)
+				if position then
+					if group_count > 1 then
+						local direction = main_path_direction(distance)
+						local right = direction and Vector3.cross(Vector3.up(), direction)
+						if not right or Vector3.length(right) < 0.001 then
+							right = Vector3(1, 0, 0)
+						end
+						right = Vector3.normalize(right)
+						local step = (CONST.RESPAWN_PROGRESS_RADIUS * 2.2) * settings.sphere_radius_scale
+						local centered_index = group_index - (group_count + 1) * 0.5
+						position = position + right * (step * centered_index)
+					end
+					local color_rgb = trigger.passed and CONST.MARKER_COLOR or CONST.RESPAWN_MOVE_TRIGGER_COLOR
+					local move_color = Color(220, color_rgb[1], color_rgb[2], color_rgb[3])
+					local radius = CONST.RESPAWN_PROGRESS_RADIUS * settings.sphere_radius_scale
+					local sphere_position = position + Vector3(0, 0, settings.path_height + radius)
+					if within_draw_distance(sphere_position, settings, state) then
+						draw_sphere(state.line_object, sphere_position, radius, 18, move_color)
+						if settings.debug_text_enabled then
+							local base_label = trigger.label
+							local label_text = format_debug_label(
+								base_label,
+								distance,
+								settings.debug_text_show_distances,
+								settings.debug_text_show_labels
+							)
+							if label_text then
+								local text_position = get_debug_text_position(
+									sphere_position,
+									base_label,
+									settings.debug_text_height,
+									settings.debug_text_offset_scale
+								)
+								output_debug_text(
+									state.debug_text,
+									label_text,
+									text_position,
+									settings.debug_text_size,
+									color_rgb
+								)
+							end
+							if state.hogtied_present then
+								local warn_label = "Rescue Move Trigger Warning"
+								local warn_text = "Rescue Move Trigger (Do Not Cross)"
+								local warn_label_text = format_debug_label(
+									warn_text,
+									distance,
+									settings.debug_text_show_distances,
+									settings.debug_text_show_labels
+								)
+								if warn_label_text then
+									local text_position = get_debug_text_position(
+										sphere_position,
+										warn_label,
+										settings.debug_text_height,
+										settings.debug_text_offset_scale
+									)
+									output_debug_text(
+										state.debug_text,
+										warn_label_text,
+										text_position,
+										settings.debug_text_size,
+										CONST.RING_COLORS.red
+									)
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	if settings.priority_move_triggers_mode ~= "off" then
+		local respawn_system = Managers.state.extension and Managers.state.extension:system("respawn_beacon_system")
+		local priority_unit = get_priority_respawn_beacon_unit(respawn_system)
+		local move_triggers = collect_priority_move_triggers(
+			state.path_total,
+			settings.priority_move_triggers_mode,
+			priority_unit
+		)
+		if #move_triggers > 0 then
+			local move_counts = {}
+			local move_indices = {}
+			for i = 1, #move_triggers do
+				local distance_key = string.format("priority_move:%.2f", move_triggers[i].distance or 0)
+				move_counts[distance_key] = (move_counts[distance_key] or 0) + 1
+			end
+			for i = 1, #move_triggers do
+				local trigger = move_triggers[i]
+				local distance = trigger.distance
+				if distance and state.path_total then
+					distance = math.max(0, math.min(distance, state.path_total))
+				end
+				local distance_key = string.format("priority_move:%.2f", distance or 0)
+				local group_count = move_counts[distance_key] or 1
+				local group_index = (move_indices[distance_key] or 0) + 1
+				move_indices[distance_key] = group_index
+				local position = distance and MainPathQueries.position_from_distance(distance)
+				if position then
+					if group_count > 1 then
+						local direction = main_path_direction(distance)
+						local right = direction and Vector3.cross(Vector3.up(), direction)
+						if not right or Vector3.length(right) < 0.001 then
+							right = Vector3(1, 0, 0)
+						end
+						right = Vector3.normalize(right)
+						local step = (CONST.RESPAWN_PROGRESS_RADIUS * 2.2) * settings.sphere_radius_scale
+						local centered_index = group_index - (group_count + 1) * 0.5
+						position = position + right * (step * centered_index)
+					end
+					local color_rgb = trigger.passed and CONST.MARKER_COLOR or CONST.RING_COLORS.orange
+					local move_color = Color(220, color_rgb[1], color_rgb[2], color_rgb[3])
+					local radius = CONST.RESPAWN_PROGRESS_RADIUS * settings.sphere_radius_scale
+					local sphere_position = position + Vector3(0, 0, settings.path_height + radius)
+					if within_draw_distance(sphere_position, settings, state) then
+						draw_sphere(state.line_object, sphere_position, radius, 18, move_color)
+						if settings.debug_text_enabled then
+							local base_label = trigger.label
+							local label_text = format_debug_label(
+								base_label,
+								distance,
+								settings.debug_text_show_distances,
+								settings.debug_text_show_labels
+							)
+							if label_text then
+								local text_position = get_debug_text_position(
+									sphere_position,
+									base_label,
+									settings.debug_text_height,
+									settings.debug_text_offset_scale
+								)
+								output_debug_text(
+									state.debug_text,
+									label_text,
+									text_position,
+									settings.debug_text_size,
+									color_rgb
+								)
+							end
+							if state.hogtied_present then
+								local warn_label = "Priority Move Trigger Warning"
+								local warn_text = "Priority Move Trigger (Do Not Cross)"
+								local warn_label_text = format_debug_label(
+									warn_text,
+									distance,
+									settings.debug_text_show_distances,
+									settings.debug_text_show_labels
+								)
+								if warn_label_text then
+									local text_position = get_debug_text_position(
+										sphere_position,
+										warn_label,
+										settings.debug_text_height,
+										settings.debug_text_offset_scale
+									)
+									output_debug_text(
+										state.debug_text,
+										warn_label_text,
+										text_position,
+										settings.debug_text_size,
+										CONST.RING_COLORS.red
+									)
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+function draw_debug_ritual_triggers(settings, state)
+	if not state.ritual_enabled then
+		return
+	end
+	if not settings.trigger_points_enabled then
+		return
+	end
+	local triggers = collect_path_triggers(state.ritual_units or {})
+	if #triggers == 0 and state.cache_entry then
+		triggers = cached_path_triggers(state.cache_entry)
+	end
+	local spawn_counts = {}
+	local spawn_indices = {}
+	for i = 1, #triggers do
+		local trigger = triggers[i]
+		if trigger.id == "spawn_trigger" then
+			local distance_key = string.format("spawn_dist:%.2f", trigger.distance or 0)
+			spawn_counts[distance_key] = (spawn_counts[distance_key] or 0) + 1
+		end
+	end
+	for i = 1, #triggers do
+		local trigger = triggers[i]
+		local distance = trigger.distance
+		if distance and state.path_total then
+			distance = math.max(0, math.min(distance, state.path_total))
+		end
+		local persist_table = nil
+		local persist_key = nil
+		local persist_passed = false
+		if distance then
+			if trigger.id == "ritual_speedup" then
+				persist_table = speedup_triggered
+				persist_key = string.format("speedup:%.2f", distance)
+			elseif trigger.id == "ritual_start" then
+				persist_table = ritual_start_triggered
+				persist_key = string.format("start:%.2f", distance)
+			elseif trigger.id == "spawn_trigger" then
+				persist_table = ritual_spawn_triggered
+				persist_key = string.format("spawn:%.2f", distance)
+			end
+		end
+		if persist_table and persist_key then
+			persist_passed = persist_table[persist_key]
+				or (state.progress_reference_distance and distance <= state.progress_reference_distance)
+			if persist_passed and not persist_table[persist_key] then
+				persist_table[persist_key] = true
+			end
+		end
+		if not persist_table and state.remove_distance and distance and distance <= state.remove_distance then
+			distance = nil
+		end
+		local position = distance and MainPathQueries.position_from_distance(distance)
+		if position then
+			local direction = main_path_direction(distance)
+			if trigger.id == "spawn_trigger" then
+				local distance_key = string.format("spawn_dist:%.2f", distance or 0)
+				local group_count = spawn_counts[distance_key] or 1
+				local group_index = (spawn_indices[distance_key] or 0) + 1
+				spawn_indices[distance_key] = group_index
+				if group_count > 1 then
+					local right = direction and Vector3.cross(Vector3.up(), direction)
+					if not right or Vector3.length(right) < 0.001 then
+						right = Vector3(1, 0, 0)
+					end
+					right = Vector3.normalize(right)
+					local step = (CONST.TRIGGER_POINT_RADIUS * 2.2) * settings.sphere_radius_scale
+					local centered_index = group_index - (group_count + 1) * 0.5
+					position = position + right * (step * centered_index)
+				end
+			end
+			local color = get_color(trigger.color, state.alpha)
+			if persist_passed then
+				color = Color(state.alpha, CONST.MARKER_COLOR[1], CONST.MARKER_COLOR[2], CONST.MARKER_COLOR[3])
+			end
+			local base_position = position + Vector3(0, 0, settings.path_height)
+			if not within_draw_distance(base_position, settings, state) then
+				goto continue_ritual
+			end
+			if settings.gate_enabled then
+				draw_gate_plane(
+					state.line_object,
+					base_position,
+					direction,
+					settings.gate_width,
+					settings.gate_height,
+					settings.gate_slices,
+					color
+				)
+			end
+			local trigger_radius = CONST.TRIGGER_POINT_RADIUS * settings.sphere_radius_scale
+			local trigger_position = base_position + Vector3(0, 0, trigger_radius)
+			draw_sphere(state.line_object, trigger_position, trigger_radius, 16, color)
+			if settings.debug_text_enabled then
+				local base_label = "Trigger"
+				if trigger.id == "spawn_trigger" then
+					base_label = "Ritual Spawn Trigger"
+				elseif trigger.id == "ritual_start" then
+					base_label = "Ritual Start Trigger"
+				elseif trigger.id == "ritual_speedup" then
+					base_label = "Ritual Speedup Trigger"
+				end
+				local label_text = format_debug_label(
+					base_label,
+					distance,
+					settings.debug_text_show_distances,
+					settings.debug_text_show_labels
+				)
+				if label_text then
+					local text_position = get_debug_text_position(
+						trigger_position,
+						base_label,
+						settings.debug_text_height,
+						settings.debug_text_offset_scale
+					)
+					local color_rgb = persist_passed and CONST.MARKER_COLOR or { color[2], color[3], color[4] }
+					output_debug_text(
+						state.debug_text,
+						label_text,
+						text_position,
+						settings.debug_text_size,
+						color_rgb
+					)
+				end
+			end
+		end
+		::continue_ritual::
+	end
+end
+
+format_debug_label = function(label, distance, show_distance, show_label)
+	if not show_label then
+		if show_distance and is_finite_number(distance) then
+			return string.format("%.1fm", distance)
+		end
+		return nil
+	end
+	if not label then
+		return nil
+	end
+	if not show_distance or not is_finite_number(distance) then
+		return label
+	end
+	return string.format("%s [%.1fm]", label, distance)
 end
 
 local function ensure_line_object(world)
@@ -1546,7 +4883,7 @@ local function draw_cylinder(line_object, center, radius, height, step, segments
 	end
 end
 
-local function draw_sphere(line_object, center, radius, segments, color)
+draw_sphere = function(line_object, center, radius, segments, color)
 	if radius <= 0 then
 		draw_point(line_object, center, color)
 		return
@@ -1578,7 +4915,7 @@ local function draw_box(line_object, center, radius, height, color)
 	pcall(LineObject.add_box, line_object, color, pose, extents)
 end
 
-local function draw_gate_plane(line_object, base_position, direction, width, height, slices, color)
+draw_gate_plane = function(line_object, base_position, direction, width, height, slices, color)
 	if not direction then
 		draw_point(line_object, base_position, color)
 		return
@@ -1618,7 +4955,7 @@ local function draw_gate_plane(line_object, base_position, direction, width, hei
 	end
 end
 
-local function draw_main_path(line_object, color, height)
+draw_main_path = function(line_object, color, height, player_position, max_distance)
 	local main_path_manager = Managers.state.main_path
 	local segments = main_path_manager and main_path_manager._main_path_segments
 	if not segments then
@@ -1626,6 +4963,7 @@ local function draw_main_path(line_object, color, height)
 	end
 
 	local h = Vector3(0, 0, height or 0.2)
+	local use_cull = max_distance and max_distance > 0 and player_position
 
 	for i = 1, #segments do
 		local path = segments[i].nodes
@@ -1644,7 +4982,17 @@ local function draw_main_path(line_object, color, height)
 					end
 					if next_node then
 						local next_pos = Vector3(next_node[1], next_node[2], next_node[3]) + h
-						pcall(LineObject.add_line, line_object, color, position, next_pos)
+						local allow = true
+						if use_cull then
+							local dist_a = safe_distance(position, player_position)
+							local dist_b = safe_distance(next_pos, player_position)
+							if dist_a and dist_b and dist_a > max_distance and dist_b > max_distance then
+								allow = false
+							end
+						end
+						if allow then
+							pcall(LineObject.add_line, line_object, color, position, next_pos)
+						end
 					end
 				end
 			end
@@ -1652,9 +5000,10 @@ local function draw_main_path(line_object, color, height)
 	end
 end
 
-local function draw_debug_lines(world, ritual_units)
+function draw_debug_lines(world, ritual_units, t, ritual_enabled)
 	if not mod:get("debug_enabled") then
 		clear_line_object(world)
+		clear_debug_label_markers()
 		return
 	end
 
@@ -1662,61 +5011,43 @@ local function draw_debug_lines(world, ritual_units)
 	if not world or not Vector3 or not LineObject or not Color then
 		return
 	end
+	local debug_mode = debug_text_mode()
+	local debug_text_allowed = debug_text_enabled_mode(debug_mode)
+	local labels_through_walls = mod:get("debug_labels_through_walls") and debug_text_allowed
+	if not labels_through_walls then
+		clear_debug_label_markers()
+	end
+	local update_interval = mod:get("debug_update_interval") or 0
+	if update_interval < 0 then
+		update_interval = 0
+	end
+	if update_interval > 0 and t and last_debug_refresh_t and (t - last_debug_refresh_t) < update_interval then
+		local line_object = ensure_line_object(world)
+		if line_object then
+			pcall(LineObject.dispatch, world, line_object)
+			return
+		end
+	end
 
-	local gate_enabled = mod:get("gate_enabled")
-	if gate_enabled == nil then
-		gate_enabled = true
-	end
-	local path_enabled = mod:get("path_enabled")
-	local debug_text_enabled = mod:get("debug_text_enabled")
-	local debug_text_size = mod:get("debug_text_size") or 0.2
-	local debug_text_height = mod:get("debug_text_height") or 0.4
-	local debug_text_offset_scale = math.max(0.15, debug_text_size * 2)
-	local boss_trigger_spheres_enabled = mod:get("boss_trigger_spheres_enabled")
-	local boss_mutator_triggers_enabled = mod:get("boss_mutator_triggers_enabled")
-	local boss_twins_triggers_enabled = mod:get("boss_twins_triggers_enabled")
-	local boss_patrol_triggers_enabled = mod:get("boss_patrol_triggers_enabled")
-	local pacing_spawn_triggers_enabled = mod:get("pacing_spawn_triggers_enabled")
-	if boss_mutator_triggers_enabled == nil then
-		boss_mutator_triggers_enabled = true
-	end
-	if boss_twins_triggers_enabled == nil then
-		boss_twins_triggers_enabled = true
-	end
-	if boss_patrol_triggers_enabled == nil then
-		boss_patrol_triggers_enabled = true
-	end
-	if pacing_spawn_triggers_enabled == nil then
-		pacing_spawn_triggers_enabled = false
-	end
-	local respawn_progress_enabled = mod:get("respawn_progress_enabled")
-	local trigger_points_enabled = mod:get("trigger_points_enabled")
-	local progress_point_enabled = mod:get("progress_point_enabled")
-	local path_height = mod:get("path_height") or 0.15
-	local progress_height = mod:get("progress_height") or 0.15
-	local sphere_radius_scale = mod:get("sphere_radius_scale") or 1
-	if sphere_radius_scale < 0.05 then
-		sphere_radius_scale = 0.05
-	end
-	local show_any = path_enabled
-		or trigger_points_enabled
-		or progress_point_enabled
-		or boss_trigger_spheres_enabled
-		or pacing_spawn_triggers_enabled
-		or respawn_progress_enabled
-		or debug_text_enabled
-	if not show_any then
+	last_debug_refresh_t = t or 0
+
+	local settings = get_debug_settings()
+	if not settings.show_any then
 		clear_line_object(world)
+		clear_debug_label_markers()
 		return
 	end
 
 	local debug_text = nil
-	if debug_text_enabled then
+	if settings.debug_text_enabled then
 		debug_text = get_debug_text_manager(world)
 		clear_debug_text(debug_text)
 	else
 		clear_debug_text(debug_text_manager)
 		destroy_debug_text_manager()
+	end
+	if labels_through_walls then
+		begin_debug_label_markers()
 	end
 
 	local line_object = ensure_line_object(world)
@@ -1730,346 +5061,35 @@ local function draw_debug_lines(world, ritual_units)
 		return
 	end
 
-	local gate_width = mod:get("gate_width") or 6
-	local gate_height = mod:get("gate_height") or 8
-	local gate_slices = mod:get("gate_slices") or 1
 	local path_total = MainPathQueries.total_path_distance and MainPathQueries.total_path_distance()
-	local remove_distance = nil
-	local player = Managers.player and Managers.player:local_player(1)
-	local player_unit = player and player.player_unit
-	local player_distance = nil
-	if player_unit and unit_is_alive(player_unit) then
-		local player_position = get_unit_position(player_unit)
-		player_distance = get_position_travel_distance(player_position)
-		if not player_distance then
-			player_distance = get_unit_travel_distance(player_unit)
+	local cache_entry = nil
+	if settings.allow_live_data then
+		if settings.cache_use_offline_enabled then
+			cache_entry = get_cache_entry(get_mission_name(), path_total)
 		end
-		if player_distance then
-			remove_distance = player_distance - TRIGGER_PAST_MARGIN
-		end
+	elseif settings.cache_use_enabled then
+		cache_entry = get_cache_entry(get_mission_name(), path_total)
 	end
-	if not remove_distance and Managers.state.main_path and Managers.state.main_path.ahead_unit then
-		local _, ahead_distance = Managers.state.main_path:ahead_unit(1)
-		if ahead_distance then
-			remove_distance = ahead_distance - TRIGGER_PAST_MARGIN
-		end
-	end
-	if path_total then
-		if player_distance then
-			player_distance = math.max(0, math.min(player_distance, path_total))
-		end
-		if remove_distance then
-			remove_distance = math.max(0, math.min(remove_distance, path_total))
-		end
-	end
-	local alpha = 200
+	local state = build_debug_state(path_total)
+	state.line_object = line_object
+	state.debug_text = debug_text
+	state.cache_entry = cache_entry
+	state.ritual_units = ritual_units
+	state.ritual_enabled = ritual_enabled
 
-	if path_enabled then
-		local path_color = Color(120, PATH_COLOR[1], PATH_COLOR[2], PATH_COLOR[3])
-		draw_main_path(line_object, path_color, path_height)
-	end
-
-	if progress_point_enabled and player_distance then
-		if path_total then
-			player_distance = math.max(0, math.min(player_distance, path_total))
-		end
-		if not max_progress_distance or player_distance > max_progress_distance then
-			max_progress_distance = player_distance
-		end
-		local progress_position = MainPathQueries.position_from_distance(player_distance)
-		if progress_position then
-			local color = Color(220, PROGRESS_COLOR[1], PROGRESS_COLOR[2], PROGRESS_COLOR[3])
-			local position = progress_position + Vector3(0, 0, path_height + progress_height)
-			draw_sphere(line_object, position, 0.4 * sphere_radius_scale, 20, color)
-			if debug_text_enabled then
-				local text_position = get_debug_text_position(position, "Progress", debug_text_height, debug_text_offset_scale)
-				output_debug_text(
-					debug_text,
-					"Progress",
-					text_position,
-					debug_text_size,
-					PROGRESS_COLOR
-				)
-			end
-		end
-		if max_progress_distance then
-			local max_position = MainPathQueries.position_from_distance(max_progress_distance)
-			if max_position then
-				local max_color = Color(220, PROGRESS_MAX_COLOR[1], PROGRESS_MAX_COLOR[2], PROGRESS_MAX_COLOR[3])
-				local position = max_position + Vector3(0, 0, path_height + progress_height)
-				draw_sphere(line_object, position, 0.45 * sphere_radius_scale, 20, max_color)
-				if debug_text_enabled then
-					local text_position =
-						get_debug_text_position(position, "Max Progress", debug_text_height, debug_text_offset_scale)
-					output_debug_text(
-						debug_text,
-						"Max Progress",
-						text_position,
-						debug_text_size,
-						PROGRESS_MAX_COLOR
-					)
-				end
-			end
-		end
-	end
-
-	if boss_trigger_spheres_enabled then
-		local boss_triggers = collect_boss_triggers({
-			mutator = boss_mutator_triggers_enabled,
-			twins = boss_twins_triggers_enabled,
-			boss_patrols = boss_patrol_triggers_enabled,
-		})
-		if #boss_triggers > 0 then
-			local twins_counts = {}
-			local twins_indices = {}
-			for i = 1, #boss_triggers do
-				local trigger = boss_triggers[i]
-				if trigger.label == "Twins Ambush Trigger" then
-					local distance_key = string.format("twins_dist:%.2f", trigger.distance or 0)
-					twins_counts[distance_key] = (twins_counts[distance_key] or 0) + 1
-				end
-			end
-			for i = 1, #boss_triggers do
-				local trigger = boss_triggers[i]
-				local distance = trigger.distance
-				if distance and path_total then
-					distance = math.max(0, math.min(distance, path_total))
-				end
-				local position = distance and MainPathQueries.position_from_distance(distance)
-				if position then
-					if trigger.label == "Twins Ambush Trigger" then
-						local distance_key = string.format("twins_dist:%.2f", distance or 0)
-						local group_count = twins_counts[distance_key] or 1
-						local group_index = (twins_indices[distance_key] or 0) + 1
-						twins_indices[distance_key] = group_index
-						if group_count > 1 then
-							local direction = main_path_direction(distance)
-							local right = direction and Vector3.cross(Vector3.up(), direction)
-							if not right or Vector3.length(right) < 0.001 then
-								right = Vector3(1, 0, 0)
-							end
-							right = Vector3.normalize(right)
-							local step = (BOSS_TRIGGER_RADIUS * 2.2) * sphere_radius_scale
-							local centered_index = group_index - (group_count + 1) * 0.5
-							position = position + right * (step * centered_index)
-						end
-					end
-					local key = trigger.key or string.format("boss:%.2f", distance or 0)
-					local passed = boss_triggered[key] or (player_distance and distance and distance <= player_distance)
-					if passed and not boss_triggered[key] then
-						boss_triggered[key] = true
-					end
-					local color_rgb = passed and MARKER_COLOR or BOSS_TRIGGER_COLOR
-					local boss_color = Color(220, color_rgb[1], color_rgb[2], color_rgb[3])
-					local radius = BOSS_TRIGGER_RADIUS * sphere_radius_scale
-					local sphere_position = position + Vector3(0, 0, path_height + radius)
-					draw_sphere(line_object, sphere_position, radius, 18, boss_color)
-					if debug_text_enabled then
-						local label = trigger.label or "Boss Trigger"
-						local text_position =
-							get_debug_text_position(sphere_position, label, debug_text_height, debug_text_offset_scale)
-						output_debug_text(
-							debug_text,
-							label,
-							text_position,
-							debug_text_size,
-							color_rgb
-						)
-					end
-				end
-			end
-		end
-	end
-
-	if pacing_spawn_triggers_enabled then
-		local pacing_triggers = collect_pacing_spawn_triggers()
-		if #pacing_triggers > 0 then
-			local pacing_counts = {}
-			local pacing_indices = {}
-			for i = 1, #pacing_triggers do
-				local distance = pacing_triggers[i].distance
-				local distance_key = string.format("pacing_dist:%.2f", distance or 0)
-				pacing_counts[distance_key] = (pacing_counts[distance_key] or 0) + 1
-			end
-			for i = 1, #pacing_triggers do
-				local trigger = pacing_triggers[i]
-				local distance = trigger.distance
-				if distance and path_total then
-					distance = math.max(0, math.min(distance, path_total))
-				end
-				local distance_key = string.format("pacing_dist:%.2f", distance or 0)
-				local group_count = pacing_counts[distance_key] or 1
-				local group_index = (pacing_indices[distance_key] or 0) + 1
-				pacing_indices[distance_key] = group_index
-				local position = distance and MainPathQueries.position_from_distance(distance)
-				if position then
-					if group_count > 1 then
-						local direction = main_path_direction(distance)
-						local right = direction and Vector3.cross(Vector3.up(), direction)
-						if not right or Vector3.length(right) < 0.001 then
-							right = Vector3(1, 0, 0)
-						end
-						right = Vector3.normalize(right)
-						local step = (TRIGGER_POINT_RADIUS * 2.2) * sphere_radius_scale
-						local centered_index = group_index - (group_count + 1) * 0.5
-						position = position + right * (step * centered_index)
-					end
-					local key = trigger.key or string.format("pacing:%.2f", distance or 0)
-					local passed = pacing_triggered[key] or (player_distance and distance and distance <= player_distance)
-					if passed and not pacing_triggered[key] then
-						pacing_triggered[key] = true
-					end
-					local color_rgb = passed and MARKER_COLOR or PACING_TRIGGER_COLOR
-					local pace_color = Color(200, color_rgb[1], color_rgb[2], color_rgb[3])
-					local radius = TRIGGER_POINT_RADIUS * sphere_radius_scale
-					local sphere_position = position + Vector3(0, 0, path_height + radius)
-					draw_sphere(line_object, sphere_position, radius, 16, pace_color)
-					if debug_text_enabled then
-						local label = trigger.label or "Pacing Spawn"
-						local text_position =
-							get_debug_text_position(sphere_position, label, debug_text_height, debug_text_offset_scale)
-						output_debug_text(
-							debug_text,
-							label,
-							text_position,
-							debug_text_size,
-							color_rgb
-						)
-					end
-				end
-			end
-		end
-	end
-
-	if respawn_progress_enabled then
-		local respawn_distances = collect_respawn_progress_distances()
-		if #respawn_distances > 0 then
-			for i = 1, #respawn_distances do
-				local distance = respawn_distances[i]
-				if distance and path_total then
-					distance = math.max(0, math.min(distance, path_total))
-				end
-				local passed = player_distance and distance and distance <= player_distance
-				local position = distance and MainPathQueries.position_from_distance(distance)
-				if position then
-					local color_rgb = passed and MARKER_COLOR or RESPAWN_PROGRESS_COLOR
-					local respawn_color = Color(220, color_rgb[1], color_rgb[2], color_rgb[3])
-					local radius = RESPAWN_PROGRESS_RADIUS * sphere_radius_scale
-					local sphere_position = position + Vector3(0, 0, path_height + radius)
-					draw_sphere(line_object, sphere_position, radius, 18, respawn_color)
-					if debug_text_enabled then
-						local text_position = get_debug_text_position(
-							sphere_position,
-							"Respawn Progress",
-							debug_text_height,
-							debug_text_offset_scale
-						)
-						output_debug_text(
-							debug_text,
-							"Respawn Progress",
-							text_position,
-							debug_text_size,
-							color_rgb
-						)
-					end
-				end
-			end
-		end
-	end
-
-	if trigger_points_enabled then
-		local triggers = collect_path_triggers(ritual_units or {})
-		local spawn_counts = {}
-		local spawn_indices = {}
-		for i = 1, #triggers do
-			local trigger = triggers[i]
-			if trigger.id == "spawn_trigger" then
-				local distance_key = string.format("spawn_dist:%.2f", trigger.distance or 0)
-				spawn_counts[distance_key] = (spawn_counts[distance_key] or 0) + 1
-			end
-		end
-		for i = 1, #triggers do
-			local trigger = triggers[i]
-			local distance = trigger.distance
-			if distance and path_total then
-				distance = math.max(0, math.min(distance, path_total))
-			end
-			local persist_table = nil
-			local persist_key = nil
-			local persist_passed = false
-			if distance then
-				if trigger.id == "ritual_speedup" then
-					persist_table = speedup_triggered
-					persist_key = string.format("speedup:%.2f", distance)
-				elseif trigger.id == "ritual_start" then
-					persist_table = ritual_start_triggered
-					persist_key = string.format("start:%.2f", distance)
-				end
-			end
-			if persist_table and persist_key then
-				persist_passed = persist_table[persist_key] or (player_distance and distance <= player_distance)
-				if persist_passed and not persist_table[persist_key] then
-					persist_table[persist_key] = true
-				end
-			end
-			if not persist_table and remove_distance and distance and distance <= remove_distance then
-				distance = nil
-			end
-			local position = distance and MainPathQueries.position_from_distance(distance)
-			if position then
-				local direction = main_path_direction(distance)
-				if trigger.id == "spawn_trigger" then
-					local distance_key = string.format("spawn_dist:%.2f", distance or 0)
-					local group_count = spawn_counts[distance_key] or 1
-					local group_index = (spawn_indices[distance_key] or 0) + 1
-					spawn_indices[distance_key] = group_index
-					if group_count > 1 then
-						local right = direction and Vector3.cross(Vector3.up(), direction)
-						if not right or Vector3.length(right) < 0.001 then
-							right = Vector3(1, 0, 0)
-						end
-						right = Vector3.normalize(right)
-						local step = (TRIGGER_POINT_RADIUS * 2.2) * sphere_radius_scale
-						local centered_index = group_index - (group_count + 1) * 0.5
-						position = position + right * (step * centered_index)
-					end
-				end
-				local color = get_color(trigger.color, alpha)
-				if persist_passed then
-					color = Color(alpha, MARKER_COLOR[1], MARKER_COLOR[2], MARKER_COLOR[3])
-				end
-				local base_position = position + Vector3(0, 0, path_height)
-				if gate_enabled then
-					draw_gate_plane(line_object, base_position, direction, gate_width, gate_height, gate_slices, color)
-				end
-				local trigger_radius = TRIGGER_POINT_RADIUS * sphere_radius_scale
-				local trigger_position = base_position + Vector3(0, 0, trigger_radius)
-				draw_sphere(line_object, trigger_position, trigger_radius, 16, color)
-				if debug_text_enabled then
-					local label = "Trigger"
-					if trigger.id == "spawn_trigger" then
-						label = "Ritual Spawn Trigger"
-					elseif trigger.id == "ritual_start" then
-						label = "Ritual Start Trigger"
-					elseif trigger.id == "ritual_speedup" then
-						label = "Ritual Speedup Trigger"
-					end
-					local text_position =
-						get_debug_text_position(trigger_position, label, debug_text_height, debug_text_offset_scale)
-					local color_rgb = persist_passed and MARKER_COLOR or { color[2], color[3], color[4] }
-					output_debug_text(
-						debug_text,
-						label,
-						text_position,
-						debug_text_size,
-						color_rgb
-					)
-				end
-			end
-		end
-	end
+	draw_debug_path(settings, state)
+	draw_debug_progress(settings, state)
+	draw_debug_boss_triggers(settings, state)
+	draw_debug_pacing_triggers(settings, state)
+	draw_debug_ambush_triggers(settings, state)
+	draw_debug_backtrack_trigger(settings, state)
+	draw_debug_respawn_points(settings, state)
+	draw_debug_ritual_triggers(settings, state)
 
 	pcall(LineObject.dispatch, world, line_object)
+	if labels_through_walls then
+		finalize_debug_label_markers()
+	end
 end
 
 local function mark_dirty()
@@ -2080,16 +5100,25 @@ end
 local function reset_runtime_state(clear_text)
 	clear_markers()
 	clear_timer_markers()
+	clear_debug_label_markers()
 	local world = Managers.world and Managers.world:world("level_world")
 	if world then
 		clear_line_object(world)
 	end
 	destroy_debug_lines()
 	max_progress_distance = nil
+	player_progress = {}
 	boss_triggered = {}
 	speedup_triggered = {}
 	ritual_start_triggered = {}
+	ritual_spawn_triggered = {}
 	pacing_triggered = {}
+	ambush_triggered = {}
+	last_active_respawn_beacon = nil
+	last_active_respawn_beacon_distance = nil
+	respawn_waiting_active = false
+	respawn_rewind_crossed = false
+	respawn_rewind_lost = false
 	if clear_text then
 		local debug_text = get_debug_text_manager(world)
 		clear_debug_text(debug_text)
@@ -2104,6 +5133,9 @@ mod:hook_safe(CLASS.HudElementWorldMarkers, "init", function(self)
 	end
 	if RitualZonesTimerMarker then
 		self._marker_templates[RitualZonesTimerMarker.name] = RitualZonesTimerMarker
+	end
+	if RitualZonesDebugLabelMarker then
+		self._marker_templates[RitualZonesDebugLabelMarker.name] = RitualZonesDebugLabelMarker
 	end
 	marker_generation = marker_generation + 1
 	markers_dirty = true
@@ -2165,8 +5197,62 @@ mod.on_setting_changed = function()
 	end
 	local debug_text = get_debug_text_manager(world)
 	clear_debug_text(debug_text)
-	if not mod:get("debug_text_enabled") then
+	local mode = debug_text_mode()
+	if not debug_text_enabled_mode(mode) then
 		destroy_debug_text_manager()
+	end
+	if not (mod:get("debug_labels_through_walls") and debug_text_enabled_mode(mode)) then
+		clear_debug_label_markers()
+	end
+
+	local record_enabled = cache_record_enabled()
+	if record_enabled ~= last_cache_record_enabled then
+		last_cache_record_enabled = record_enabled
+		if record_enabled then
+			cache_debug("Cache record enabled")
+			cache_record_mission = nil
+			cache_record_count = 0
+			if is_gameplay_state() then
+				cache_debug("Cache record toggle: attempting update")
+				local ritual_enabled = is_havoc_ritual_active()
+				local ritual_units = ritual_enabled and find_ritual_units() or {}
+				local t = nil
+				if Managers.time and Managers.time.time then
+					local ok, value = pcall(Managers.time.time, Managers.time, "gameplay")
+					if ok then
+						t = value
+					end
+				end
+				record_offline_cache(ritual_units, t or 0)
+			end
+		else
+			cache_debug("Cache record disabled")
+		end
+	end
+
+	local use_enabled = cache_use_enabled()
+	if use_enabled ~= last_cache_use_enabled then
+		last_cache_use_enabled = use_enabled
+		if use_enabled then
+			cache_debug("Cache use enabled")
+			if cache_reads_allowed() then
+				refresh_cache_from_disk()
+			end
+		else
+			cache_debug("Cache use disabled")
+		end
+	end
+	local use_offline_enabled = cache_use_offline_enabled()
+	if use_offline_enabled ~= last_cache_use_offline_enabled then
+		last_cache_use_offline_enabled = use_offline_enabled
+		if use_offline_enabled then
+			cache_debug("Cache use enabled (offline)")
+			if cache_reads_allowed() then
+				refresh_cache_from_disk()
+			end
+		else
+			cache_debug("Cache use disabled (offline)")
+		end
 	end
 end
 
@@ -2177,14 +5263,25 @@ end
 
 mod.on_game_state_changed = function(status, state_name)
 	if status == "enter" and (state_name == "GameplayStateRun" or state_name == "StateGameplay") then
+		if cache_reads_allowed() then
+			refresh_cache_from_disk()
+		end
 		return
 	end
 
+	if cache_reads_allowed() or cache_runtime_dirty then
+		ensure_cache_loaded()
+		write_cache_file()
+	end
 	reset_runtime_state(true)
 	cleanup_done = false
 end
 
 mod.on_disabled = function()
+	if cache_reads_allowed() or cache_runtime_dirty then
+		ensure_cache_loaded()
+		write_cache_file()
+	end
 	reset_runtime_state(true)
 	cleanup_done = true
 end
@@ -2224,9 +5321,11 @@ mod.update = function(dt, t)
 		end
 	end
 
-	local ritual_units = find_ritual_units()
+	local ritual_enabled = is_havoc_ritual_active()
+	local ritual_units = ritual_enabled and find_ritual_units() or {}
 
 	update_markers(ritual_units)
 	update_timer_markers(ritual_units, dt or 0, t or 0)
-	draw_debug_lines(world, ritual_units)
+	record_offline_cache(ritual_units, t or 0)
+	draw_debug_lines(world, ritual_units, t or 0, ritual_enabled)
 end

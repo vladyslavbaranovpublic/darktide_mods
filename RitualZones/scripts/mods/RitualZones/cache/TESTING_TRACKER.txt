@@ -1,0 +1,30 @@
+Patch Gathered on = 1.10.3
+Maps -> [#of test]
+Specific havoc modifiers and which level
+
+
+Archivum Sycorax
+Ascension Riser 31
+Chasm Logistratum
+Chasm Station HL-16-11
+Clandestium Gloriana
+Comms-Plex 154/2f
+Consignment Yard HL-17-36
+
+Dark Communion	->  #2
+RITUAL+HEALING 	->  34, 39
+
+Enclavum Baross
+Excise Vault Spireside-13
+Hab Dreyko
+Magistrati Oubliette TM8-707
+Mercantile HL-70-04
+Power Matrix HL-17-36
+Refinery Delta-17
+Relay Station TRS-150
+Rolling Steel
+Silo Cluster 18-66/a
+Smelter Complex HL-17-36
+The Orthus Offensive
+Vigil Station Oblivium
+Warren 6-19
