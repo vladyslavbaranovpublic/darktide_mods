@@ -1,8 +1,8 @@
 --[[
 	File: RitualZones_marker.lua
 	Description: Draws ritual trigger zones and shows ritual timers for havoc daemonhosts.
-	Overall Release Version: 1.01.0
-	File Version: 1.1.0
+	Overall Release Version: 1.2.0
+	File Version: 1.2.0
 	Last Updated: 2026-01-07
 	Author: LAUREHTE
 ]]
