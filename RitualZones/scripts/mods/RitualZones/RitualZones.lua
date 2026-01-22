@@ -116,7 +116,8 @@ local CACHE_LABELS = {
 	ambush_horde = { label = "Ambush Horde Trigger", loc = "label_ambush_horde_trigger" },
 	backtrack_horde = { label = "Backtrack Horde Trigger", loc = "label_backtrack_horde_trigger" },
 }
-local cache_label_for_key = nil
+cache_label_for_key = nil
+unit_is_alive = nil
 local LABEL_LOCALIZATION_KEYS = {
 	["Progress"] = "label_progress",
 	["Progress (You)"] = "label_progress_you",
@@ -219,7 +220,7 @@ local timer_state = {}
 local debug_label_state = { markers = {}, generation = 0, marker_count = 0 }
 
 
-local debug_label_limits = { max_markers = 200, hard_cap = 200, move_threshold_sq = 1.0 }
+local debug_label_limits = { max_markers = 170, hard_cap = 170, move_threshold_sq = 1.0 }
 
 
 local pending_marker_cleanup = false
@@ -245,6 +246,7 @@ local debug_state = {
 	label_refresh_enabled = true,
 	last_label_refresh_position = nil,
 	force_label_refresh_frames = 0,
+	force_label_scan = false,
 	last_labels_through_walls = nil,
 	last_text_background = nil,
 	text_z_offset = 0,
@@ -922,7 +924,7 @@ local function load_cache_file()
 				return
 			end
 			for key, bucket in pairs(source_list) do
-				local label = cache_label_for_key(key) or default_label or key
+				local label = (cache_label_for_key and cache_label_for_key(key)) or default_label or key
 				if is_array_table(bucket) then
 					for i = 1, #bucket do
 						add_entry_to_cache(target_list, bucket[i], label)
@@ -1454,7 +1456,7 @@ local function cache_key_for_label(label, fallback_key)
 	return fallback_key
 end
 
-cache_label_for_key = function(key)
+function cache_label_for_key(key)
 	local data = key and CACHE_LABELS[key] or nil
 	return data and data.label or key
 end
@@ -1695,7 +1697,7 @@ local function cached_boss_triggers(entry)
 	end
 	for key, bucket in pairs(boss) do
 		if is_array_table(bucket) then
-			local label = cache_label_for_key(key)
+			local label = (cache_label_for_key and cache_label_for_key(key)) or key
 			for i = 1, #bucket do
 				local distance = bucket[i]
 				if is_finite_number(distance) then
@@ -1734,7 +1736,7 @@ local function cached_pacing_triggers(entry)
 	end
 	for key, bucket in pairs(pacing) do
 		if is_array_table(bucket) then
-			local label = cache_label_for_key(key)
+			local label = (cache_label_for_key and cache_label_for_key(key)) or key
 			for i = 1, #bucket do
 				local distance = bucket[i]
 				if is_finite_number(distance) then
@@ -1773,7 +1775,7 @@ local function cached_ambush_triggers(entry)
 	end
 	for key, bucket in pairs(ambush) do
 		if is_array_table(bucket) then
-			local label = cache_label_for_key(key)
+			local label = (cache_label_for_key and cache_label_for_key(key)) or key
 			for i = 1, #bucket do
 				local distance = bucket[i]
 				if is_finite_number(distance) then
@@ -1828,7 +1830,7 @@ local function cached_priority_beacon(entry)
 	return best_distance, best_position
 end
 
-local function unit_is_alive(unit)
+function unit_is_alive(unit)
 	if not unit then
 		return false
 	end
@@ -3407,6 +3409,61 @@ local function record_offline_cache(ritual_units, t)
 	end
 end
 
+local function mark_entry_removed(entry)
+	if entry then
+		entry._removed = true
+		entry._token = (entry._token or 0) + 1
+		entry._pending = nil
+		if entry._pending_remove_id then
+			if Managers and Managers.event then
+				Managers.event:trigger("remove_world_marker", entry._pending_remove_id)
+			end
+			entry._pending_remove_id = nil
+		end
+	end
+end
+
+local function add_world_marker_unit_safe(table_ref, unit, entry, template_name, data)
+	if not Managers.event then
+		return
+	end
+	entry._removed = false
+	entry._token = (entry._token or 0) + 1
+	local token = entry._token
+	entry._pending = true
+
+	Managers.event:trigger("add_world_marker_unit", template_name, unit, function(marker_id)
+		if entry._removed or table_ref[unit] ~= entry or entry._token ~= token then
+			Managers.event:trigger("remove_world_marker", marker_id)
+			return
+		end
+		entry.id = marker_id
+		entry._pending = nil
+	end, data)
+end
+
+local function add_world_marker_position_safe(table_ref, key, entry, template_name, position, data, on_assigned)
+	if not Managers.event then
+		return
+	end
+	entry._removed = false
+	entry._token = (entry._token or 0) + 1
+	local token = entry._token
+	entry._pending = true
+
+	Managers.event:trigger("add_world_marker_position", template_name, position, function(marker_id)
+		if entry._removed or table_ref[key] ~= entry or entry._token ~= token then
+			Managers.event:trigger("remove_world_marker", marker_id)
+			return
+		end
+		entry.id = marker_id
+		entry._pending = nil
+		if on_assigned then
+			pcall(on_assigned, marker_id)
+		end
+	end, data)
+end
+
 local function clear_markers()
 	if not Managers.event then
 		pending_marker_cleanup = true
@@ -3414,6 +3471,7 @@ local function clear_markers()
 	end
 
 	for unit, entry in pairs(markers) do
+		mark_entry_removed(entry)
 		if entry.id then
 			Managers.event:trigger("remove_world_marker", entry.id)
 		end
@@ -3428,6 +3486,7 @@ local function clear_timer_markers()
 	end
 
 	for unit, entry in pairs(timer_markers) do
+		mark_entry_removed(entry)
 		if entry.id then
 			Managers.event:trigger("remove_world_marker", entry.id)
 		end
@@ -3442,6 +3501,7 @@ local function clear_debug_label_markers()
 	end
 
 	for key, entry in pairs(debug_label_state.markers) do
+		mark_entry_removed(entry)
 		if entry.id then
 			Managers.event:trigger("remove_world_marker", entry.id)
 		end
@@ -3462,6 +3522,7 @@ local function finalize_debug_label_markers()
 	end
 	for key, entry in pairs(debug_label_state.markers) do
 		if entry.generation ~= debug_label_state.generation then
+			mark_entry_removed(entry)
 			if entry.id then
 				Managers.event:trigger("remove_world_marker", entry.id)
 			end
@@ -3489,6 +3550,7 @@ local function prune_debug_label_markers(player_position)
 			local dist_sq = dx * dx + dy * dy + dz * dz
 			entry.distance_sq = dist_sq
 			if dist_sq > max_range_sq then
+				mark_entry_removed(entry)
 				if entry.id then
 					Managers.event:trigger("remove_world_marker", entry.id)
 				end
@@ -3548,8 +3610,11 @@ local function ensure_debug_label_marker(key, text, position, size, color, check
 	end
 	if max_range_sq and distance_sq and distance_sq > max_range_sq then
 		local existing = debug_label_state.markers[key]
-		if existing and existing.id then
-			Managers.event:trigger("remove_world_marker", existing.id)
+		if existing then
+			mark_entry_removed(existing)
+			if existing.id then
+				Managers.event:trigger("remove_world_marker", existing.id)
+			end
 			debug_label_state.markers[key] = nil
 			debug_label_state.marker_count = math.max(0, debug_label_state.marker_count - 1)
 		end
@@ -3597,11 +3662,14 @@ local function ensure_debug_label_marker(key, text, position, size, color, check
 		end
 		if far_key then
 			local existing = debug_label_state.markers[far_key]
-			if existing and existing.id then
-				Managers.event:trigger("remove_world_marker", existing.id)
+			if existing then
+				mark_entry_removed(existing)
+				if existing.id then
+					Managers.event:trigger("remove_world_marker", existing.id)
+				end
+				debug_label_state.markers[far_key] = nil
+				debug_label_state.marker_count = math.max(0, debug_label_state.marker_count - 1)
 			end
-			debug_label_state.markers[far_key] = nil
-			debug_label_state.marker_count = math.max(0, debug_label_state.marker_count - 1)
 		end
 		if not debug_label_state.markers[key] and debug_label_state.marker_count >= debug_label_limits.max_markers then
 			return false
@@ -3627,6 +3695,13 @@ local function ensure_debug_label_marker(key, text, position, size, color, check
 		entry.data.distance_scale_min = scale_min
 		entry.data.distance_scale_max = scale_max
 		entry.data.distance_scale_range = scale_range
+		if entry.id == nil and entry._pending and debug_state.label_refresh_enabled then
+			local refresh_t = debug_state.last_label_refresh_t or 0
+			if entry._pending_retry_t ~= refresh_t then
+				entry._pending = nil
+				entry._pending_retry_t = refresh_t
+			end
+		end
 		local pos = entry.position
 		local dx = position.x - (pos and pos.x or 0)
 		local dy = position.y - (pos and pos.y or 0)
@@ -3634,19 +3709,36 @@ local function ensure_debug_label_marker(key, text, position, size, color, check
 		if entry.id and (not pos or (dx * dx + dy * dy + dz * dz) > debug_label_limits.move_threshold_sq) then
 			local old_id = entry.id
 			entry.id = nil
+			entry._pending_remove_id = old_id
 			entry.position = { x = position.x, y = position.y, z = position.z }
-			Managers.event:trigger(
-				"add_world_marker_position",
+			add_world_marker_position_safe(
+				debug_label_state.markers,
+				key,
+				entry,
 				RitualZonesDebugLabelMarker.name,
 				position,
-				function(marker_id)
-					entry.id = marker_id
+				entry.data,
+				function()
 					if old_id then
 						Managers.event:trigger("remove_world_marker", old_id)
 					end
-				end,
-				entry.data
+					if entry._pending_remove_id == old_id then
+						entry._pending_remove_id = nil
+					end
+				end
 			)
+		elseif not entry.id then
+			entry.position = { x = position.x, y = position.y, z = position.z }
+			if not entry._pending then
+				add_world_marker_position_safe(
+					debug_label_state.markers,
+					key,
+					entry,
+					RitualZonesDebugLabelMarker.name,
+					position,
+					entry.data
+				)
+			end
 		else
 			entry.position = { x = position.x, y = position.y, z = position.z }
 		end
@@ -3673,23 +3765,33 @@ local function ensure_debug_label_marker(key, text, position, size, color, check
 	debug_label_state.markers[key] = new_entry
 	debug_label_state.marker_count = debug_label_state.marker_count + 1
 
-	Managers.event:trigger("add_world_marker_position", RitualZonesDebugLabelMarker.name, position, function(marker_id)
-		new_entry.id = marker_id
-	end, data)
+	add_world_marker_position_safe(
+		debug_label_state.markers,
+		key,
+		new_entry,
+		RitualZonesDebugLabelMarker.name,
+		position,
+		data
+	)
 	return true
 end
 
 local function ensure_marker(unit, icon_size, color)
 	local entry = markers[unit]
-	if entry and entry.id and entry.generation == marker_generation then
+	if entry and entry.generation == marker_generation then
 		entry.data.icon_size = icon_size
 		entry.data.color = color
 		entry.data.icon = CONST.MARKER_ICON
-		return
+		if entry.id or entry._pending then
+			return
+		end
 	end
 
-	if entry and entry.id and Managers.event then
-		Managers.event:trigger("remove_world_marker", entry.id)
+	if entry then
+		mark_entry_removed(entry)
+		if entry.id and Managers.event then
+			Managers.event:trigger("remove_world_marker", entry.id)
+		end
 	end
 
 	local data = {
@@ -3706,9 +3808,7 @@ local function ensure_marker(unit, icon_size, color)
 	markers[unit] = new_entry
 
 	if Managers.event then
-		Managers.event:trigger("add_world_marker_unit", RitualZonesMarker.name, unit, function(marker_id)
-			new_entry.id = marker_id
-		end, data)
+		add_world_marker_unit_safe(markers, unit, new_entry, RitualZonesMarker.name, data)
 	end
 end
 
@@ -3746,6 +3846,7 @@ local function update_markers(ritual_units)
 
 	for unit, entry in pairs(markers) do
 		if not active[unit] or not unit_is_alive(unit) then
+			mark_entry_removed(entry)
 			if entry.id then
 				Managers.event:trigger("remove_world_marker", entry.id)
 			end
@@ -3759,17 +3860,22 @@ end
 
 local function ensure_timer_marker(unit, text, color, text_size, height, show_background)
 	local entry = timer_markers[unit]
-	if entry and entry.id and entry.generation == marker_generation then
+	if entry and entry.generation == marker_generation then
 		entry.data.text = text
 		entry.data.color = color
 		entry.data.text_size = text_size
 		entry.data.height = height
 		entry.data.show_background = show_background
-		return
+		if entry.id or entry._pending then
+			return
+		end
 	end
 
-	if entry and entry.id and Managers.event then
-		Managers.event:trigger("remove_world_marker", entry.id)
+	if entry then
+		mark_entry_removed(entry)
+		if entry.id and Managers.event then
+			Managers.event:trigger("remove_world_marker", entry.id)
+		end
 	end
 
 	local data = {
@@ -3788,9 +3894,7 @@ local function ensure_timer_marker(unit, text, color, text_size, height, show_ba
 	timer_markers[unit] = new_entry
 
 	if Managers.event then
-		Managers.event:trigger("add_world_marker_unit", RitualZonesTimerMarker.name, unit, function(marker_id)
-			new_entry.id = marker_id
-		end, data)
+		add_world_marker_unit_safe(timer_markers, unit, new_entry, RitualZonesTimerMarker.name, data)
 	end
 end
 
@@ -4044,14 +4148,17 @@ local function update_timer_markers(ritual_units, dt, t)
 			local time_left, state = update_timer_state(unit, dt, t)
 
 			if state and state.completed then
-				local entry = timer_markers[unit]
-				if entry and entry.id then
+			local entry = timer_markers[unit]
+			if entry then
+				mark_entry_removed(entry)
+				if entry.id then
 					Managers.event:trigger("remove_world_marker", entry.id)
 				end
-				timer_markers[unit] = nil
-			else
-				local display_time = time_left
-				local color = timer_color(display_time)
+			end
+			timer_markers[unit] = nil
+		else
+			local display_time = time_left
+			local color = timer_color(display_time)
 				local distance_text = distance and string.format("%.0fm", distance) or "??m"
 				local text = string.format("%s | %s", distance_text, format_time(display_time))
 				ensure_timer_marker(unit, text, color, text_size, 1.2 + height, show_background)
@@ -4063,6 +4170,7 @@ local function update_timer_markers(ritual_units, dt, t)
 	for unit, entry in pairs(timer_markers) do
 		local state = timer_state[unit]
 		if not unit_is_alive(unit) then
+			mark_entry_removed(entry)
 			if entry.id then
 				Managers.event:trigger("remove_world_marker", entry.id)
 			end
@@ -4070,6 +4178,7 @@ local function update_timer_markers(ritual_units, dt, t)
 			timer_state[unit] = nil
 			ritual_ended_units[unit] = nil
 		elseif not active[unit] then
+			mark_entry_removed(entry)
 			if entry.id then
 				Managers.event:trigger("remove_world_marker", entry.id)
 			end
@@ -4172,18 +4281,22 @@ local function ensure_debug_text_manager(world)
 			local text_value = tostring(text)
 			local text_width = nil
 			local text_height = nil
-			local ok_extents, text_extent_min, text_extent_max =
-				pcall(Gui.text_extents, gui, text_value, font, text_size)
-			if ok_extents and text_extent_min and text_extent_max then
-				text_width = text_extent_max[1] - text_extent_min[1]
-				text_height = text_extent_max[2] - text_extent_min[2]
+			local ok_extents = false
+			local text_extents_fn = Gui and Gui.text_extents
+			if type(text_extents_fn) == "function" then
+				local ok_minmax, min, max = pcall(text_extents_fn, gui, text_value, font, text_size)
+				if ok_minmax and min and max then
+					text_width = max[1] - min[1]
+					text_height = max[2] - min[2]
+					ok_extents = text_width and text_height and text_width > 0 and text_height > 0
+				end
 			end
-			if not text_width or not text_height or text_width <= 0 or text_height <= 0 then
+			if not ok_extents then
 				local length = utf8 and utf8.len(text_value) or #text_value
 				text_width = (text_size * 0.6) * length
 				text_height = text_size
 			end
-			local text_offset = Vector3(-text_width / 2, -text_height / 2, 0)
+			local text_offset = Vector3(-text_width * 0.5, -text_height * 0.5, 0)
 			category = category or "none"
 			color = color or Vector3(255, 255, 255)
 
@@ -4197,28 +4310,42 @@ local function ensure_debug_text_manager(world)
 			end
 
 			local color_value = nil
+			local ok_color = false
 			if type(Color) == "function" then
-				color_value = Color(255, color.x, color.y, color.z)
+				ok_color, color_value = pcall(Color, color.x, color.y, color.z)
+				if not ok_color or not color_value then
+					ok_color, color_value = pcall(Color, 255, color.x, color.y, color.z)
+				end
 			elseif type(Color) == "table" then
 				local mt = getmetatable(Color)
 				if mt and type(mt.__call) == "function" then
-					color_value = Color(255, color.x, color.y, color.z)
+					ok_color, color_value = pcall(Color, color.x, color.y, color.z)
+					if not ok_color or not color_value then
+						ok_color, color_value = pcall(Color, 255, color.x, color.y, color.z)
+					end
 				elseif type(Color.new) == "function" then
-					color_value = Color.new(255, color.x, color.y, color.z)
+					ok_color, color_value = pcall(Color.new, 255, color.x, color.y, color.z)
 				elseif type(Color.from_rgb) == "function" then
-					color_value = Color.from_rgb(color.x, color.y, color.z)
+					ok_color, color_value = pcall(Color.from_rgb, color.x, color.y, color.z)
 				end
 			end
-			if not color_value and type(Color) == "function" then
-				color_value = Color(255, 255, 255, 255)
+			if not ok_color or not color_value then
+				ok_color, color_value = pcall(Color, 255, 255, 255)
+			end
+			if not color_value then
+				self._disabled = true
+				debug_state.force_label_markers = true
+				if not debug_state.debug_text_log_text_failed then
+					debug_state.debug_text_log_text_failed = true
+					mod:echo("[RitualZones] Debug text: Color helper failed; disabling world labels for this session")
+				end
+				return
 			end
 
 			local ok_text, id = pcall(text_func, gui, text_value, material, text_size, font, tm, text_offset, 0, color_value)
-			if not ok_text then
-				ok_text, id = pcall(text_func, gui, text_value, font, text_size, material, tm, text_offset, 0, color_value)
-			end
 			if not ok_text or not id then
 				self._disabled = true
+				debug_state.force_label_markers = true
 				if not debug_state.debug_text_log_text_failed then
 					debug_state.debug_text_log_text_failed = true
 					mod:echo("[RitualZones] Debug text: Gui.text_3d failed; disabling world labels for this session")
@@ -4325,11 +4452,16 @@ local function output_debug_text(debug_text, text, position, size, color_rgb, ke
 	if not position or not Vector3 then
 		return
 	end
+	if debug_text and debug_text._disabled then
+		debug_state.force_label_markers = true
+		debug_text = nil
+	end
 	local labels_through_walls = mod:get("debug_labels_through_walls") == true
 	local wants_background = mod:get("debug_text_background") == true
 	local force_markers = debug_state.force_label_markers and true or false
+	local force_scan = debug_state.force_label_scan and true or false
 	if labels_through_walls or wants_background or force_markers then
-		if debug_state.label_refresh_enabled then
+		if debug_state.label_refresh_enabled or debug_state.force_label_refresh_frames > 0 or force_scan then
 			local key = key_override or build_debug_label_key(text, position)
 			local ok = ensure_debug_label_marker(
 				key,
@@ -6525,9 +6657,18 @@ function draw_debug_ritual_triggers(settings, state)
 	end
 end
 
+local localized_label_cache = {}
+
 local function localize_debug_label_text(label)
-	if not label then
+	if not label or type(label) ~= "string" then
 		return label
+	end
+	local can_cache = not label:find("%d") and not label:find("%[") and not label:find("%]")
+	if can_cache then
+		local cached = localized_label_cache[label]
+		if cached then
+			return cached
+		end
 	end
 	local localized = label
 	local loc_key = cache_loc_key_for_label(label)
@@ -6547,6 +6688,9 @@ local function localize_debug_label_text(label)
 	localized = localized:gsub("Do Not Cross", localize_label("label_do_not_cross", "Do Not Cross"))
 	localized = localized:gsub("DO NOT CROSS", localize_label("label_do_not_cross", "DO NOT CROSS"))
 	localized = localized:gsub("%f[%w]Lost%f[%W]", localize_label("label_lost", "Lost"))
+	if can_cache then
+		localized_label_cache[label] = localized
+	end
 	return localized
 end
 
@@ -6783,8 +6927,15 @@ draw_main_path = function(line_object, color, height, player_position, max_dista
 		return
 	end
 
-	local h = Vector3(0, 0, height or 0.2)
-	local use_cull = max_distance and max_distance > 0 and player_position
+	local z_offset = height or 0.2
+	local use_cull = max_distance and max_distance > 0 and player_position and Vector3
+	local px, py, pz, max_dist_sq = nil, nil, nil, nil
+	if use_cull then
+		px = Vector3.x(player_position)
+		py = Vector3.y(player_position)
+		pz = Vector3.z(player_position)
+		max_dist_sq = max_distance * max_distance
+	end
 
 	for i = 1, #segments do
 		local path = segments[i].nodes
@@ -6792,7 +6943,9 @@ draw_main_path = function(line_object, color, height, player_position, max_dista
 			for j = 1, #path do
 				local node = path[j]
 				if node then
-					local position = Vector3(node[1], node[2], node[3]) + h
+					local node_x = node[1]
+					local node_y = node[2]
+					local node_z = node[3] + z_offset
 					local next_node = nil
 					if j < #path then
 						next_node = path[j + 1]
@@ -6802,16 +6955,26 @@ draw_main_path = function(line_object, color, height, player_position, max_dista
 						next_node = next_path and next_path[1]
 					end
 					if next_node then
-						local next_pos = Vector3(next_node[1], next_node[2], next_node[3]) + h
+						local next_x = next_node[1]
+						local next_y = next_node[2]
+						local next_z = next_node[3] + z_offset
 						local allow = true
 						if use_cull then
-							local dist_a = safe_distance(position, player_position)
-							local dist_b = safe_distance(next_pos, player_position)
-							if dist_a and dist_b and dist_a > max_distance and dist_b > max_distance then
+							local dx = node_x - px
+							local dy = node_y - py
+							local dz = node_z - pz
+							local dist_a_sq = (dx * dx) + (dy * dy) + (dz * dz)
+							local ndx = next_x - px
+							local ndy = next_y - py
+							local ndz = next_z - pz
+							local dist_b_sq = (ndx * ndx) + (ndy * ndy) + (ndz * ndz)
+							if dist_a_sq > max_dist_sq and dist_b_sq > max_dist_sq then
 								allow = false
 							end
 						end
 						if allow then
+							local position = Vector3(node_x, node_y, node_z)
+							local next_pos = Vector3(next_x, next_y, next_z)
 							draw_thick_line(line_object, color, position, next_pos, thickness)
 						end
 					end
@@ -6825,6 +6988,8 @@ function draw_debug_lines(world, ritual_units, t, ritual_enabled)
 	if not mod:get("debug_enabled") then
 		clear_line_object(world)
 		clear_debug_label_markers()
+		clear_debug_text(debug_state.text_manager)
+		destroy_debug_text_manager()
 		return
 	end
 
@@ -6848,6 +7013,21 @@ function draw_debug_lines(world, ritual_units, t, ritual_enabled)
 		debug_state.last_label_refresh_t = nil
 		debug_state.last_label_refresh_position = nil
 		debug_state.force_label_markers = false
+		debug_state.force_label_scan = false
+	end
+	if debug_state.last_labels_through_walls ~= labels_through_walls
+		or debug_state.last_text_background ~= background_enabled then
+		debug_state.last_labels_through_walls = labels_through_walls
+		debug_state.last_text_background = background_enabled
+		if markers_active then
+			clear_debug_label_markers()
+			debug_state.last_label_refresh_t = nil
+			debug_state.last_label_refresh_position = nil
+			if debug_state.force_label_refresh_frames < 2 then
+				debug_state.force_label_refresh_frames = 2
+			end
+			debug_state.force_label_scan = true
+		end
 	end
 	local update_interval = mod:get("debug_update_interval") or 0
 	if update_interval < 0 then
@@ -6862,11 +7042,16 @@ function draw_debug_lines(world, ritual_units, t, ritual_enabled)
 	if markers_active and debug_state.force_label_refresh_frames > 0 then
 		label_refresh_due = true
 	end
+	if markers_active and debug_state.force_label_scan then
+		label_refresh_due = true
+	end
 
 	local settings = get_debug_settings()
 	if not settings.show_any then
 		clear_line_object(world)
 		clear_debug_label_markers()
+		clear_debug_text(debug_state.text_manager)
+		destroy_debug_text_manager()
 		return
 	end
 
@@ -6952,8 +7137,12 @@ function draw_debug_lines(world, ritual_units, t, ritual_enabled)
 	local debug_text = nil
 	if settings.debug_text_enabled and not labels_through_walls and not background_enabled then
 		debug_text = get_debug_text_manager(world)
-		if debug_text then
+		if debug_text and debug_text._disabled then
+			debug_text = nil
+			debug_state.force_label_markers = true
+		elseif debug_text then
 			clear_debug_text(debug_text)
+			debug_state.force_label_markers = false
 		else
 			debug_state.force_label_markers = true
 		end
@@ -7006,6 +7195,7 @@ function draw_debug_lines(world, ritual_units, t, ritual_enabled)
 	pcall(LineObject.dispatch, world, line_object)
 	if markers_active and label_refresh_due then
 		finalize_debug_label_markers()
+		debug_state.force_label_scan = false
 	end
 end
 
@@ -7016,6 +7206,7 @@ local function mark_dirty()
 	debug_state.last_label_refresh_t = nil
 	debug_state.last_label_refresh_position = nil
 	debug_state.force_label_refresh_frames = 0
+	debug_state.force_label_scan = true
 end
 
 local function collect_default_settings()
@@ -7225,9 +7416,11 @@ mod.on_setting_changed = function()
 		or (mod:get("debug_text_background") == true and debug_text_enabled_mode(mode))
 	if not markers_active then
 		clear_debug_label_markers()
+		debug_state.force_label_scan = false
 	end
 	if markers_active then
 		debug_state.force_label_refresh_frames = 3
+		debug_state.force_label_scan = true
 	end
 	local through_walls = mod:get("debug_labels_through_walls") == true
 	local background_on = mod:get("debug_text_background") == true
@@ -7242,6 +7435,7 @@ mod.on_setting_changed = function()
 		debug_state.last_label_refresh_t = nil
 		debug_state.last_label_refresh_position = nil
 		debug_state.force_label_refresh_frames = 3
+		debug_state.force_label_scan = true
 		debug_state.last_labels_through_walls = through_walls
 		debug_state.last_text_background = background_on
 	end
@@ -7326,6 +7520,7 @@ mod.on_game_state_changed = function(status, state_name)
 	if status == "enter" and (state_name == "GameplayStateRun" or state_name == "StateGameplay") then
 		mark_dirty()
 		debug_state.force_label_refresh_frames = 2
+		debug_state.force_label_scan = true
 		if cache_reads_allowed() then
 			refresh_cache_from_disk()
 		end

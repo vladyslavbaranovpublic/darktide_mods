@@ -60,6 +60,9 @@ local function update_background(widget, ui_renderer, text, font_type, font_size
 		bg_style.size[1] = 0
 		bg_style.size[2] = 0
 		bg_style.color[1] = 0
+		if widget.content then
+			widget.content._rz_bg_cache = nil
+		end
 		return
 	end
 
@@ -69,6 +72,20 @@ local function update_background(widget, ui_renderer, text, font_type, font_size
 	if widget and widget.style and widget.style.label and widget.style.label.size then
 		max_width = widget.style.label.size[1]
 	end
+	local cache_key = table.concat({
+		text or "",
+		font_type or "",
+		tostring(font_size or ""),
+		tostring(alpha or ""),
+		tostring(max_width or ""),
+	}, "|")
+	local cache = widget.content and widget.content._rz_bg_cache
+	if cache and cache.key == cache_key and cache.width and cache.height then
+		bg_style.size[1] = cache.width
+		bg_style.size[2] = cache.height
+		bg_style.color[1] = alpha or DEFAULT_BG_ALPHA
+		return
+	end
 	if ui_renderer and widget and widget.style and widget.style.label then
 		local text_options = UIFonts.get_font_options_by_style(widget.style.label)
 		local width, height =
@@ -77,6 +94,13 @@ local function update_background(widget, ui_renderer, text, font_type, font_size
 			bg_style.size[1] = math.max(1, width * BACKGROUND_PADDING)
 			bg_style.size[2] = math.max(1, height * BACKGROUND_PADDING)
 			bg_style.color[1] = alpha or DEFAULT_BG_ALPHA
+			if widget.content then
+				widget.content._rz_bg_cache = {
+					key = cache_key,
+					width = bg_style.size[1],
+					height = bg_style.size[2],
+				}
+			end
 			return
 		end
 	end
@@ -128,6 +152,13 @@ local function update_background(widget, ui_renderer, text, font_type, font_size
 	bg_style.size[1] = math.max(1, width * BACKGROUND_PADDING)
 	bg_style.size[2] = math.max(1, height * BACKGROUND_PADDING)
 	bg_style.color[1] = alpha or DEFAULT_BG_ALPHA
+	if widget.content then
+		widget.content._rz_bg_cache = {
+			key = cache_key,
+			width = bg_style.size[1],
+			height = bg_style.size[2],
+		}
+	end
 end
 
 local function apply_distance_scale(base_size, distance, min_scale, max_scale, range)

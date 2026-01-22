@@ -109,9 +109,10 @@ return {
 					{
 						setting_id = "debug_update_interval",
 						type = "numeric",
-						default_value = 0.01,
+						default_value = 0.2,
 						range = { 0, 0.5 },
 						decimals_number = 3,
+						tooltip = "debug_update_interval_desc",
 					},
 					{
 						setting_id = "path_height",
@@ -445,7 +446,7 @@ return {
 					{
 						setting_id = "cache_use_enabled",
 						type = "checkbox",
-						default_value = true,
+						default_value = false,
 					},
 					{
 						setting_id = "cache_use_offline_enabled",
