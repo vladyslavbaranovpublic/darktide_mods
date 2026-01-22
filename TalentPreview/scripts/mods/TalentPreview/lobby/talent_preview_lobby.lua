@@ -1,8 +1,8 @@
 --[[
 	File: lobby/talent_preview_lobby.lua
 	Description: Label, icon logic file
-	Overall Release Version: 1.0.0
-	File Version: 1.0.0
+	Overall Release Version: 1.1.0
+	File Version: 1.1.0
 	Last Updated: 2026-01-21
 	Author: LAUREHTE
 ]]
@@ -10,14 +10,25 @@
 local mod = get_mod("TalentPreview")
 
 local UIWidget = require("scripts/managers/ui/ui_widget")
+local NodeLayout
+local success_node_layout, node_layout_module = pcall(require, "scripts/ui/views/node_builder_view_base/utilities/node_layout")
+if success_node_layout then
+    NodeLayout = node_layout_module
+end
 local TalentBuilderViewSettings = require("scripts/ui/views/talent_builder_view/talent_builder_view_settings")
 local TalentLayoutParser = require("scripts/ui/views/talent_builder_view/utilities/talent_layout_parser")
 local ContentBlueprints = require("scripts/ui/views/lobby_view/lobby_view_content_blueprints")
+
+local TALENT_VIEW_PACKAGE = "packages/ui/views/talent_builder_view/talent_builder_view"
+local BROKER_STIMM_VIEW_PACKAGE = "packages/ui/views/broker_stimm_builder_view/broker_stimm_builder_view"
+local MAIN_MENU_VIEW_PACKAGE = "packages/ui/views/main_menu_view/main_menu_view"
+local ICON_LOAD_REFERENCE = "TalentPreview"
 
 local CATEGORY_ORDER = {
     "keystone",
     "stat",
     "default",
+    "blitz",
     "modifier",
 }
 
@@ -27,20 +38,85 @@ local NODE_CATEGORY = {
     stat = "stat",
     default = "default",
     iconic = "default",   
+    ability = "modifier",
     ability_modifier = "modifier",
-    tactical_modifier = "modifier",
+    tactical = "blitz",
+    tactical_modifier = "blitz",
+    aura = "modifier",
     aura_modifier = "modifier",
     broker_stimm = "default",
 }
 
 local SKIP_NODE_TYPE = {
     start = true,
-    ability = true,
-    tactical = true,
-    aura = true,
 }
 
 local EMPTY_TABLE = {}
+local loaded_archetypes = {}
+local loading_archetypes = {}
+local talent_packages_loaded = false
+local loaded_packages = {}
+
+local function _is_lobby_view_active()
+    local ui_manager = Managers.ui
+
+    if not ui_manager or not ui_manager.view_active then
+        return false
+    end
+
+    return ui_manager:view_active("lobby_view")
+end
+
+local function _ensure_preview_packages()
+    local package_manager = Managers.package
+    if not package_manager then
+        return
+    end
+
+    if not loaded_packages[TALENT_VIEW_PACKAGE] then
+        loaded_packages[TALENT_VIEW_PACKAGE] = package_manager:load(TALENT_VIEW_PACKAGE, ICON_LOAD_REFERENCE, nil, true) or true
+    end
+
+    if not loaded_packages[BROKER_STIMM_VIEW_PACKAGE] then
+        loaded_packages[BROKER_STIMM_VIEW_PACKAGE] = package_manager:load(BROKER_STIMM_VIEW_PACKAGE, ICON_LOAD_REFERENCE, nil, true) or true
+    end
+
+    if mod:get("preview_background_character") and not loaded_packages[MAIN_MENU_VIEW_PACKAGE] then
+        loaded_packages[MAIN_MENU_VIEW_PACKAGE] = package_manager:load(MAIN_MENU_VIEW_PACKAGE, ICON_LOAD_REFERENCE, nil, true) or true
+    end
+end
+
+local function _on_archetype_icons_loaded(archetype_name)
+    loaded_archetypes[archetype_name] = true
+    loading_archetypes[archetype_name] = nil
+    mod._pending_refresh = true
+end
+
+local function _ensure_talent_icon_packages(profile)
+    local talents_service = Managers.data_service and Managers.data_service.talents
+    if not talents_service then
+        return
+    end
+
+    if not talent_packages_loaded then
+        _ensure_preview_packages()
+        talent_packages_loaded = true
+    end
+
+    if not talents_service.load_icons_for_profile then
+        return
+    end
+
+    local archetype = profile and profile.archetype
+    local archetype_name = archetype and archetype.name
+
+    if not archetype_name or loaded_archetypes[archetype_name] or loading_archetypes[archetype_name] then
+        return
+    end
+
+    local on_loaded = callback(_on_archetype_icons_loaded, archetype_name)
+    loading_archetypes[archetype_name] = talents_service:load_icons_for_profile(profile, ICON_LOAD_REFERENCE, on_loaded, true) or true
+end
 
 local function _safe_number(value, fallback)
     if type(value) ~= "number" or value ~= value then
@@ -80,6 +156,22 @@ local function _get_preview_offset_x()
     return value
 end
 
+local function _category_enabled(category)
+    if category == "keystone" then
+        return mod:get("show_keystone") ~= false
+    elseif category == "stat" then
+        return mod:get("show_stat") ~= false
+    elseif category == "default" then
+        return mod:get("show_default") ~= false
+    elseif category == "blitz" then
+        return mod:get("show_blitz") ~= false
+    elseif category == "modifier" then
+        return mod:get("show_modifiers") ~= false
+    end
+
+    return true
+end
+
 local function _collect_selected_nodes(profile)
     if not profile or not profile.archetype or not profile.archetype.talents then
         return nil, ""
@@ -87,10 +179,13 @@ local function _collect_selected_nodes(profile)
 
     local archetype = profile.archetype
     local selected_talents = profile.talents or EMPTY_TABLE
+    local fallback_icon = NodeLayout and NodeLayout.fallback_icon and NodeLayout.fallback_icon()
+        or "content/ui/textures/icons/talents/psyker/psyker_ability_discharge"
     local entries_by_category = {
         keystone = {},
         stat = {},
         default = {},
+        blitz = {},
         modifier = {},
     }
     local signature_parts = {}
@@ -113,8 +208,20 @@ local function _collect_selected_nodes(profile)
             return
         end
 
+        if node_type == "aura" and mod:get("show_aura") == false then
+            return
+        end
+
+        if node_type == "ability_modifier" and mod:get("show_ability_modifiers") == false then
+            return
+        end
+
+        if node_type == "broker_stimm" and mod:get("show_broker_stimm") == false then
+            return
+        end
+
         local category = NODE_CATEGORY[node_type]
-        if not category then
+        if not category or not _category_enabled(category) then
             return
         end
 
@@ -125,11 +232,23 @@ local function _collect_selected_nodes(profile)
 
         order = order + 1
 
+        local icon = node.icon or talent.large_icon or talent.icon
+        if type(icon) == "string" then
+            if icon == "" or icon:find("icon here", 1, true) or not icon:match("^content/") then
+                icon = nil
+            end
+        else
+            icon = nil
+        end
+        if not icon or icon == "" then
+            icon = fallback_icon
+        end
+
         entries_by_category[category][#entries_by_category[category] + 1] = {
             talent = talent,
             talent_name = talent_name,
             node_type = node_type,
-            icon = node.icon or talent.large_icon or talent.icon,
+            icon = icon,
             points_spent = tier,
             order = order,
         }
@@ -173,6 +292,11 @@ local function _clear_preview_widgets(self, spawn_slot)
         return
     end
 
+    if spawn_slot.talent_preview_background then
+        self:_unregister_widget_name(spawn_slot.talent_preview_background.name)
+        spawn_slot.talent_preview_background = nil
+    end
+
     local widgets = spawn_slot.talent_preview_widgets
     if not widgets then
         spawn_slot.talent_preview_signature = nil
@@ -209,6 +333,7 @@ local function _build_preview_widgets(self, spawn_slot, entries_by_category)
 
     local current_offset_y = base_offset_y
     local widget_index = 0
+    local min_x, max_x, min_y, max_y
 
     for _, category in ipairs(CATEGORY_ORDER) do
         local entries = entries_by_category[category]
@@ -222,98 +347,40 @@ local function _build_preview_widgets(self, spawn_slot, entries_by_category)
                 local col = (i - 1) % icons_per_row
                 local offset_width = start_margin + column_width * col + base_offset_x
                 local offset_height = current_offset_y - row_height * row
-                local use_plain_icon = entry.node_type == "none"  --"stat" should be here but its white boxes for now
                 local widget_definition
                 local config
                 local node_type_settings
 
-                if use_plain_icon then
-                    local pass_template = {
-                        {
-                            pass_type = "texture",
-                            style_id = "frame_selected_talent",
-                            value = "content/ui/materials/frames/talents/circular_frame_selected",
-                            value_id = "frame_selected_talent",
-                            style = {
-                                horizontal_alignment = "center",
-                                vertical_alignment = "center",
-                                color = Color.ui_terminal(255, true),
-                                size = {
-                                    icon_size + 6,
-                                    icon_size + 6,
-                                },
-                                offset = {
-                                    0,
-                                    0,
-                                    0,
-                                },
-                            },
-                            visibility_function = function(content)
-                                return content.hotspot.is_hover or content.hotspot.is_selected
-                            end,
-                        },
-                        {
-                            pass_type = "texture",
-                            style_id = "icon",
-                            value_id = "icon",
-                            value = entry.icon,
-                            style = {
-                                horizontal_alignment = "center",
-                                vertical_alignment = "center",
-                                color = Color.white(255, true),
-                                size = {
-                                    icon_size,
-                                    icon_size,
-                                },
-                                offset = {
-                                    0,
-                                    0,
-                                    1,
-                                },
-                            },
-                        },
-                        {
-                            content_id = "hotspot",
-                            pass_type = "hotspot",
-                            content = {
-                                disabled = false,
-                            },
-                            style = {
-                                horizontal_alignment = "center",
-                                vertical_alignment = "bottom",
-                            },
-                        },
-                    }
-
-                    widget_definition = UIWidget.create_definition(pass_template, scenegraph_id, nil, size, {})
-                else
-                    node_type_settings = settings_by_node_type[entry.node_type] or settings_by_node_type.default
-                    config = {
-                        loadout = {
-                            icon = entry.icon,
-                        },
-                        node_type_settings = node_type_settings,
-                        loadout_id = entry.node_type,
-                    }
-                    local pass_template_function = template.pass_template_function
-                    local pass_template = pass_template_function and pass_template_function(self, config) or template.pass_template
-                    local optional_style = template.style or {}
-                    widget_definition = pass_template and UIWidget.create_definition(pass_template, scenegraph_id, nil, size, optional_style)
-                end
+                node_type_settings = settings_by_node_type[entry.node_type] or settings_by_node_type.default
+                config = {
+                    loadout = {
+                        icon = entry.icon,
+                    },
+                    node_type_settings = node_type_settings,
+                    loadout_id = entry.node_type,
+                }
+                local pass_template_function = template.pass_template_function
+                local pass_template = pass_template_function and pass_template_function(self, config) or template.pass_template
+                local optional_style = template.style or {}
+                widget_definition = pass_template and UIWidget.create_definition(pass_template, scenegraph_id, nil, size, optional_style)
 
                 if widget_definition then
                     widget_index = widget_index + 1
 
                     local name_talent = string.format("talent_preview_%s_%s", spawn_slot.index, widget_index)
                     local talent_widget = self:_create_widget(name_talent, widget_definition)
-                    local init = not use_plain_icon and template.init
+                    local init = template.init
 
                     if init then
                         init(self, talent_widget, config)
                     end
 
-                    if use_plain_icon then
-                        talent_widget.content.icon = entry.icon
+                    local talent_style = talent_widget.style and talent_widget.style.talent
+                    local material_values = talent_style and talent_style.material_values
+                    if material_values and node_type_settings then
+                        material_values.frame = node_type_settings.frame or material_values.frame
+                        material_values.icon_mask = node_type_settings.icon_mask or material_values.icon_mask
+                        material_values.gradient_map = node_type_settings.gradient_map or material_values.gradient_map
                     end
 
                     if entry.node_type == "default" or entry.node_type == "stat" or entry.node_type == "iconic" then
@@ -346,11 +413,87 @@ local function _build_preview_widgets(self, spawn_slot, entries_by_category)
                         is_talent_preview = true,
                     }
                     spawn_slot.talent_preview_widgets[#spawn_slot.talent_preview_widgets + 1] = talent_widget
+
+                    local x1 = offset_width
+                    local y1 = offset_height
+                    local x2 = offset_width + icon_size
+                    local y2 = offset_height + icon_size
+
+                    min_x = min_x and math.min(min_x, x1) or x1
+                    max_x = max_x and math.max(max_x, x2) or x2
+                    min_y = min_y and math.min(min_y, y1) or y1
+                    max_y = max_y and math.max(max_y, y2) or y2
                 end
             end
 
             current_offset_y = current_offset_y - rows * row_height - row_gap
         end
+    end
+
+    local use_fancy_background = mod:get("preview_background_character") == true
+    local use_black_background = mod:get("preview_background") == true
+
+    if (use_black_background or use_fancy_background) and min_x and max_x and min_y and max_y then
+        if use_fancy_background then
+            _ensure_preview_packages()
+        end
+        local padding = math.max(6, math.floor(icon_size * 0.2))
+        local width = (max_x - min_x) + padding * 2
+        local height = (max_y - min_y) + padding * 2
+        local pass_template
+
+        if use_fancy_background then
+            pass_template = {
+                {
+                    pass_type = "texture",
+                    style_id = "background",
+                    value = "content/ui/materials/backgrounds/terminal_basic",
+                    style = {
+                        horizontal_alignment = "center",
+                        vertical_alignment = "center",
+                        scale_to_material = true,
+                        color = Color.terminal_grid_background(nil, true),
+                        offset = {
+                            0,
+                            0,
+                            0,
+                        },
+                    },
+                },
+            }
+        else
+            pass_template = {
+                {
+                    pass_type = "rect",
+                    style_id = "background",
+                    style = {
+                        color = {
+                            160,
+                            0,
+                            0,
+                            0,
+                        },
+                    },
+                },
+            }
+        end
+
+        local widget_definition = UIWidget.create_definition(pass_template, scenegraph_id, nil, {width, height}, {})
+        local name_bg = string.format("talent_preview_bg_%s", spawn_slot.index)
+        local bg_widget = self:_create_widget(name_bg, widget_definition)
+
+        bg_widget.original_offset = {
+            min_x - padding,
+            min_y - padding,
+            -3,
+        }
+        bg_widget.offset = {
+            min_x - padding,
+            min_y - padding,
+            -3,
+        }
+
+        spawn_slot.talent_preview_background = bg_widget
     end
 end
 
@@ -369,6 +512,8 @@ local function _update_slot_preview(self, spawn_slot)
         _clear_preview_widgets(self, spawn_slot)
         return
     end
+
+    _ensure_talent_icon_packages(profile)
 
     local entries_by_category, signature = _collect_selected_nodes(profile)
 
@@ -435,6 +580,37 @@ function mod.on_setting_changed(setting_id)
 
     if setting_id == "preview_offset_y" or setting_id == "preview_offset_x" then
         mod._pending_refresh = true
+        return
+    end
+
+    if setting_id == "show_keystone"
+        or setting_id == "show_stat"
+        or setting_id == "show_default"
+        or setting_id == "show_modifiers"
+        or setting_id == "show_aura"
+        or setting_id == "show_blitz"
+        or setting_id == "show_ability_modifiers"
+        or setting_id == "show_broker_stimm"
+        or setting_id == "preview_background"
+        or setting_id == "preview_background_character" then
+        mod._pending_refresh = true
+    end
+end
+
+function mod.on_unload(exit_game)
+    if not exit_game then
+        return
+    end
+
+    local package_manager = Managers.package
+    if not package_manager or not package_manager.has_loaded_id then
+        return
+    end
+
+    for _, load_id in pairs(loaded_packages) do
+        if load_id and load_id ~= true and package_manager:has_loaded_id(load_id) then
+            package_manager:release(load_id)
+        end
     end
 end
 
@@ -470,6 +646,10 @@ mod:hook("LobbyView", "_check_loadout_changes", function(func, self)
         return
     end
 
+    if not _is_lobby_view_active() then
+        return
+    end
+
     _update_all_slots(self)
 end)
 
@@ -496,6 +676,10 @@ mod:hook("LobbyView", "_draw_widgets", function(func, self, dt, t, input_service
         return
     end
 
+    if not _is_lobby_view_active() then
+        return
+    end
+
     if not self._world_initialized or self._show_weapons then
         return
     end
@@ -510,6 +694,14 @@ mod:hook("LobbyView", "_draw_widgets", function(func, self, dt, t, input_service
         if slot.occupied and slot.profile_spawner and slot.profile_spawner:spawned() then
             local widget_offset_x = slot.panel_widget.offset[1] - 30
             local preview_widgets = slot.talent_preview_widgets
+            local bg_widget = slot.talent_preview_background
+
+            if bg_widget then
+                bg_widget.offset[1] = bg_widget.original_offset[1] + widget_offset_x + 35
+                bg_widget.offset[2] = bg_widget.original_offset[2]
+
+                UIWidget.draw(bg_widget, ui_renderer)
+            end
 
             if preview_widgets then
                 for j = 1, #preview_widgets do

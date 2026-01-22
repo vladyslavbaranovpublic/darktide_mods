@@ -1,8 +1,8 @@
 --[[
 	File: TalentPreview.lua
 	Description: Main load file and logic
-	Overall Release Version: 1.0.0
-	File Version: 1.0.0
+	Overall Release Version: 1.1.0
+	File Version: 1.1.0
 	Last Updated: 2026-01-21
 	Author: LAUREHTE
 ]]
