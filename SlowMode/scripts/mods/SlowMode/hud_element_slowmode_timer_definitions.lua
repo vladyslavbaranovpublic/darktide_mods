@@ -1,7 +1,7 @@
 --[[
 	File: hud_element_slowmode_timer_definitions.lua
 	Description: Scenegraph and widget definitions for the SlowMode timer HUD element.
-	Overall Release Version: 1.0.0
+	Overall Release Version: 1.1.0
 	File Version: 1.0.0
 	Last Updated: 2026-01-05
 	Author: LAUREHTE

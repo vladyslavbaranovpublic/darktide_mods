@@ -1,7 +1,7 @@
 --[[
 	File: SlowMode_data.lua
 	Description: Mod settings and UI layout for SlowMode.
-	Overall Release Version: 1.0.0
+	Overall Release Version: 1.1.0
 	File Version: 1.0.0
 	Last Updated: 2026-01-05
 	Author: LAUREHTE
@@ -37,16 +37,27 @@ local mod_data = {
 	is_togglable = true,
 	options = {
 		widgets = {
-			numeric_setting("slowmode_speed_percent", 100, 0, 300, 1),
+			{
+				setting_id = "slowmode_general_group",
+				type = "group",
+				sub_widgets = {
+					{
+						setting_id = "slowmode_enabled",
+						type = "checkbox",
+						default_value = true,
+					},
+					numeric_setting("slowmode_speed_percent", 100, 0, 500, 1),
+				},
+			},
 			{
 				setting_id = "slowmode_presets_group",
 				type = "group",
 				sub_widgets = {
-					numeric_setting("slowmode_preset_1_percent", 50, 0, 300, 1),
+					numeric_setting("slowmode_preset_1_percent", 50, 0, 500, 1),
 					keybind_setting("slowmode_preset_1_key", "apply_preset_1"),
-					numeric_setting("slowmode_preset_2_percent", 100, 0, 300, 1),
+					numeric_setting("slowmode_preset_2_percent", 100, 0, 500, 1),
 					keybind_setting("slowmode_preset_2_key", "apply_preset_2"),
-					numeric_setting("slowmode_preset_3_percent", 150, 0, 300, 1),
+					numeric_setting("slowmode_preset_3_percent", 150, 0, 500, 1),
 					keybind_setting("slowmode_preset_3_key", "apply_preset_3"),
 				},
 			},

@@ -1,18 +1,22 @@
 --[[
 	File: hud_element_slowmode_timer.lua
 	Description: HUD element for displaying the slow-mode-aware gameplay timer.
-	Overall Release Version: 1.0.0
+	Overall Release Version: 1.1.0
 	File Version: 1.0.0
 	Last Updated: 2026-01-05
 	Author: LAUREHTE
 ]]
 local mod = get_mod("SlowMode")
+local MatchmakingConstants = require("scripts/settings/network/matchmaking_constants")
+
+local HOST_TYPES = MatchmakingConstants.HOST_TYPES
 
 local Definitions = mod:io_dofile("SlowMode/scripts/mods/SlowMode/hud_element_slowmode_timer_definitions")
 
 local HudElementSlowModeTimer = class("HudElementSlowModeTimer", "HudElementBase")
 
 local SETTINGS = {
+	enabled = "slowmode_enabled",
 	show_timer = "slowmode_show_timer",
 	timer_x = "slowmode_timer_x",
 	timer_y = "slowmode_timer_y",
@@ -38,7 +42,58 @@ local function get_setting_number(setting_id, fallback)
 	return parsed
 end
 
+local function is_mod_active()
+	if mod.is_enabled and not mod:is_enabled() then
+		return false
+	end
+
+	if mod:get(SETTINGS.enabled) == false then
+		return false
+	end
+
+	return true
+end
+
+local function current_host_type()
+	local connection = Managers and Managers.connection
+	if connection and connection.host_type then
+		return connection:host_type()
+	end
+
+	local multiplayer_session = Managers and Managers.multiplayer_session
+	if multiplayer_session and multiplayer_session.host_type then
+		return multiplayer_session:host_type()
+	end
+
+	return nil
+end
+
+local function is_training_grounds_mode(game_mode_name)
+	return game_mode_name == "training_grounds" or game_mode_name == "shooting_range"
+end
+
+local function is_offline_allowed(game_mode_name)
+	local host_type = current_host_type()
+	if not host_type then
+		return false
+	end
+
+	if host_type == HOST_TYPES.singleplay then
+		return true
+	end
+
+	if host_type == HOST_TYPES.singleplay_backend_session then
+		return is_training_grounds_mode(game_mode_name)
+	end
+
+	return false
+end
+
 local function is_timer_allowed()
+	if not is_mod_active() then
+		return false
+	end
+
 	if not mod:get(SETTINGS.show_timer) then
 		return false
 	end
@@ -53,7 +108,7 @@ local function is_timer_allowed()
 		return false
 	end
 
-	return true
+	return is_offline_allowed(game_mode_name)
 end
 
 function HudElementSlowModeTimer:init(parent, draw_layer, start_scale)

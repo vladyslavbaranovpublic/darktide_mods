@@ -1,7 +1,7 @@
 --[[
 	File: SlowMode_localization.lua
 	Description: English localization strings for SlowMode settings and UI.
-	Overall Release Version: 1.0.0
+	Overall Release Version: 1.1.0
 	File Version: 1.0.0
 	Last Updated: 2026-01-05
 	Author: LAUREHTE
@@ -11,13 +11,25 @@ return {
 		en = "{#color(226,199,126)}>> Slow Mode <<{#reset()}",
 	},
 	mod_description = {
-		en = "{#color(226,199,126)}Release 1.0.0{#reset()} | Author: LAUREHTE\nAdjust gameplay speed in 10%% steps (0%% to 300%%).",
+		en = "{#color(226,199,126)}Release 1.0.1{#reset()} | Author: LAUREHTE\nAdjust gameplay speed in 10%% steps (0%% to 300%%).",
 	},
 	slowmode_speed_percent = {
 		en = "Speed (%%)",
 	},
 	slowmode_speed_percent_description = {
 		en = "Set gameplay speed as a percent (syncs with the hotkeys).",
+	},
+	slowmode_general_group = {
+		en = "General",
+	},
+	slowmode_general_group_description = {
+		en = "Main toggle and core speed settings.",
+	},
+	slowmode_enabled = {
+		en = "Enable SlowMode",
+	},
+	slowmode_enabled_description = {
+		en = "Disable to prevent any gameplay speed changes.",
 	},
 	slowmode_presets_group = {
 		en = "Presets",

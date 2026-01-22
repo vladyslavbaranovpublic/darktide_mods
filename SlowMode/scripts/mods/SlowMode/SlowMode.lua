@@ -1,17 +1,21 @@
 --[[
 	File: SlowMode.lua
 	Description: Gameplay speed controller with hotkeys, presets, and HUD timer support.
-	Overall Release Version: 1.0.0
-	File Version: 1.0.0
+	Overall Release Version: 1.1.0
+	File Version: 1.1.0
 	Last Updated: 2026-01-05
 	Author: LAUREHTE
 ]]
 local mod = get_mod("SlowMode")
+local MatchmakingConstants = require("scripts/settings/network/matchmaking_constants")
+
+local HOST_TYPES = MatchmakingConstants.HOST_TYPES
 
 local HUD_TIMER_CLASS = "HudElementSlowModeTimer"
 local HUD_TIMER_FILE = "SlowMode/scripts/mods/SlowMode/hud_element_slowmode_timer"
 
 local SETTINGS = {
+	enabled = "slowmode_enabled",
 	speed_percent = "slowmode_speed_percent",
 	preset_1_percent = "slowmode_preset_1_percent",
 	preset_2_percent = "slowmode_preset_2_percent",
@@ -20,7 +24,7 @@ local SETTINGS = {
 
 local STEP_PERCENT = 10
 local MIN_PERCENT = 0
-local MAX_PERCENT = 300
+local MAX_PERCENT = 500
 local DEFAULT_PERCENT = 100
 
 mod:register_hud_element({
@@ -66,6 +70,18 @@ local function get_setting_number(setting_id, fallback)
 	return parsed
 end
 
+local function is_mod_active()
+	if mod.is_enabled and not mod:is_enabled() then
+		return false
+	end
+
+	if mod:get(SETTINGS.enabled) == false then
+		return false
+	end
+
+	return true
+end
+
 local function current_game_mode_name()
 	local game_mode_manager = Managers and Managers.state and Managers.state.game_mode
 	if not game_mode_manager or not game_mode_manager.game_mode_name then
@@ -75,7 +91,42 @@ local function current_game_mode_name()
 	return game_mode_manager:game_mode_name()
 end
 
-local function is_allowed_context()
+local function current_host_type()
+	local connection = Managers and Managers.connection
+	if connection and connection.host_type then
+		return connection:host_type()
+	end
+
+	local multiplayer_session = Managers and Managers.multiplayer_session
+	if multiplayer_session and multiplayer_session.host_type then
+		return multiplayer_session:host_type()
+	end
+
+	return nil
+end
+
+local function is_training_grounds_mode(game_mode_name)
+	return game_mode_name == "training_grounds" or game_mode_name == "shooting_range"
+end
+
+local function is_offline_allowed(game_mode_name)
+	local host_type = current_host_type()
+	if not host_type then
+		return false
+	end
+
+	if host_type == HOST_TYPES.singleplay then
+		return true
+	end
+
+	if host_type == HOST_TYPES.singleplay_backend_session then
+		return is_training_grounds_mode(game_mode_name)
+	end
+
+	return false
+end
+
+local function is_context_allowed()
 	local game_mode_name = current_game_mode_name()
 	if not game_mode_name then
 		return false
@@ -85,7 +136,7 @@ local function is_allowed_context()
 		return false
 	end
 
-	return true
+	return is_offline_allowed(game_mode_name)
 end
 
 local function apply_gameplay_scale(percent)
@@ -124,10 +175,18 @@ local function snap_down(value, step)
 end
 
 function mod:_set_percent(value, silent)
-	if not is_allowed_context() then
+	if not is_mod_active() then
+		reset_to_default(is_context_allowed())
+		if not silent then
+			mod:echo("SlowMode: disabled.")
+		end
+		return
+	end
+
+	if not is_context_allowed() then
 		reset_to_default(false)
 		if not silent then
-			mod:echo("SlowMode: only available in missions or Psykanium.")
+			mod:echo("SlowMode: only available offline in Psykanium or solo play.")
 		end
 		return
 	end
@@ -151,8 +210,13 @@ function mod:_set_percent(value, silent)
 end
 
 function mod:increase_speed()
-	if not is_allowed_context() then
-		mod:echo("SlowMode: only available in missions or Psykanium.")
+	if not is_mod_active() then
+		mod:echo("SlowMode: disabled.")
+		return
+	end
+
+	if not is_context_allowed() then
+		mod:echo("SlowMode: only available offline in Psykanium or solo play.")
 		return
 	end
 
@@ -163,8 +227,13 @@ function mod:increase_speed()
 end
 
 function mod:decrease_speed()
-	if not is_allowed_context() then
-		mod:echo("SlowMode: only available in missions or Psykanium.")
+	if not is_mod_active() then
+		mod:echo("SlowMode: disabled.")
+		return
+	end
+
+	if not is_context_allowed() then
+		mod:echo("SlowMode: only available offline in Psykanium or solo play.")
 		return
 	end
 
@@ -193,13 +262,19 @@ end
 
 function mod.on_game_state_changed(status, state_name)
 	if status == "enter" then
-		local should_apply = state_name == "StateGameplay" and is_allowed_context()
+		local should_apply = state_name == "StateGameplay" and is_context_allowed()
 		reset_to_default(should_apply)
 	end
 end
 
 function mod.on_setting_changed(setting_id)
-	if setting_id == SETTINGS.speed_percent then
+	if setting_id == SETTINGS.enabled then
+		if is_mod_active() then
+			mod:_set_percent(mod:get(SETTINGS.speed_percent) or DEFAULT_PERCENT, true)
+		else
+			reset_to_default(is_context_allowed())
+		end
+	elseif setting_id == SETTINGS.speed_percent then
 		mod:_set_percent(mod:get(SETTINGS.speed_percent) or DEFAULT_PERCENT, true)
 	end
 end
@@ -207,7 +282,18 @@ end
 mod:hook("AdaptiveClockHandlerClient", "post_update", function(func, self, main_dt)
 	func(self, main_dt)
 
-	if not is_allowed_context() then
+	local is_active = is_mod_active()
+	if not is_active then
+		if mod._was_active then
+			reset_to_default(true)
+		end
+		mod._was_active = false
+		return
+	end
+
+	mod._was_active = true
+
+	if not is_context_allowed() then
 		return
 	end
 
