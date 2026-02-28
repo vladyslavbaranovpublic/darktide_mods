@@ -1,8 +1,8 @@
 --[[
 	File: QuickLeave_data.lua
 	Description: Mod settings and metadata.
-	Overall Release Version: 1.0.0
-	File Version: 1.0.0
+	Overall Release Version: 1.1.0
+	File Version: 1.1.0
 	File Introduced in: 1.0.0
 	Last Updated: 2026-02-06
 	Author: LAUREHTE
@@ -25,6 +25,11 @@ return {
 				setting_id = "show_in_outro",
 				type = "checkbox",
 				default_value = true,
+			},
+			{
+				setting_id = "leave_party_with_quick_leave",
+				type = "checkbox",
+				default_value = false,
 			},
 			{
 				setting_id = "use_safe_button_template",

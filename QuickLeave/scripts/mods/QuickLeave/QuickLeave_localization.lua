@@ -1,8 +1,8 @@
 --[[
 	File: QuickLeave_localization.lua
 	Description: Localization strings for UI and settings.
-	Overall Release Version: 1.0.0
-	File Version: 1.0.0
+	Overall Release Version: 1.1.0
+	File Version: 1.1.0
 	File Introduced in: 1.0.0
 	Last Updated: 2026-02-06
 	Author: LAUREHTE
@@ -31,6 +31,12 @@ return {
 	},
 	show_in_outro_description = {
 		en = "Displays the Quick Leave button during victory and defeat cutscenes.",
+	},
+	leave_party_with_quick_leave = {
+		en = "Leave party too",
+	},
+	leave_party_with_quick_leave_description = {
+		en = "If enabled, Quick Leave uses normal mission leave (also leaves party). If disabled, it uses stay-in-party mission leave.",
 	},
 	use_safe_button_template = {
 		en = "Use safe button style",
