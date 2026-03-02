@@ -289,6 +289,10 @@ function SpawnHooks.register(mod, core)
             return func(self, breed_name, position, rotation, side_id, optional_param_table)
         end
 
+        if config.use_vanilla_enemy_logic == true then
+            return func(self, breed_name, position, rotation, side_id, optional_param_table)
+        end
+
         local enemy_context = {
             side_id = side_id,
             optional_param_table = optional_param_table,
@@ -487,7 +491,13 @@ function SpawnHooks.register(mod, core)
     end)
 
     mod:hook_safe("MinionSpawnManager", "update", function(self, dt, t)
-        if core and mod:is_enabled() then
+        if not core or not mod:is_enabled() then
+            return
+        end
+
+        local can_randomize, config = core:should_randomize()
+
+        if can_randomize and config.use_vanilla_enemy_logic ~= true then
             core:process_pending_enemy_despawns(self)
         end
     end)
@@ -506,6 +516,10 @@ function SpawnHooks.register(mod, core)
         local can_randomize, config = core:should_randomize()
 
         if not can_randomize then
+            return func(self, pickup_spawners, distribution_type, pickup_pool, seed)
+        end
+
+        if config.use_vanilla_item_logic == true then
             return func(self, pickup_spawners, distribution_type, pickup_pool, seed)
         end
 
@@ -566,6 +580,10 @@ function SpawnHooks.register(mod, core)
         local can_randomize, config = core:should_randomize()
 
         if not can_randomize then
+            return func(self, pickup_name, position, rotation, optional_pickup_spawner, optional_placed_on_unit, optional_spawn_interaction_cooldown, optional_origin_player, skip_group)
+        end
+
+        if config.use_vanilla_item_logic == true then
             return func(self, pickup_name, position, rotation, optional_pickup_spawner, optional_placed_on_unit, optional_spawn_interaction_cooldown, optional_origin_player, skip_group)
         end
 

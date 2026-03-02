@@ -36,6 +36,18 @@ local localizations = {
     enable_randomizer_description = {
         en = "Master switch for all randomization hooks.",
     },
+    use_vanilla_enemy_logic = {
+        en = "Use Vanilla Enemy Logic",
+    },
+    use_vanilla_enemy_logic_description = {
+        en = "Bypass Randomizer enemy hooks entirely and use Darktide's native enemy spawning behavior.",
+    },
+    use_vanilla_item_logic = {
+        en = "Use Vanilla Item Logic",
+    },
+    use_vanilla_item_logic_description = {
+        en = "Bypass Randomizer item hooks entirely and use Darktide's native item spawning behavior.",
+    },
     debug_mode = {
         en = "Debug Mode",
     },

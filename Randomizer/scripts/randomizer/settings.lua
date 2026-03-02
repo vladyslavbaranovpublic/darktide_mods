@@ -101,6 +101,8 @@ function Settings.get_config(mod, data, utils)
 
     local config = {
         enable_randomizer = _read_boolean(mod, utils, "enable_randomizer", true),
+        use_vanilla_enemy_logic = _read_boolean(mod, utils, "use_vanilla_enemy_logic", false),
+        use_vanilla_item_logic = _read_boolean(mod, utils, "use_vanilla_item_logic", false),
         debug_mode = _read_boolean(mod, utils, "debug_mode", false),
         seed_value = math.floor(tonumber(utils.safe_get_setting(mod, "seed_value", 0)) or 0),
         use_random_seed = _read_boolean(mod, utils, "use_random_seed", true),

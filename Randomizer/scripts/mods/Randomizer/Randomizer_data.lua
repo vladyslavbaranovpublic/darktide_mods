@@ -231,6 +231,12 @@ RandomizerData.blocked_randomizer_enemy_name_patterns = {
     "daemonhost",
 }
 
+-- Enemy breeds that should default to "disabled" when running the baseline reset action.
+RandomizerData.reset_default_disabled_enemy_breeds = {
+    "cultist_ritualist",
+    "cultist_flamer",
+}
+
 local MINION_BREED_TYPE = BreedSettings.types.minion
 
 local function _sanitize_setting_token(value)
@@ -701,6 +707,8 @@ local ARCHETYPE_WEIGHT_SETTING = {
 local function _build_darktide_baseline_settings()
     local baseline = {
         enable_randomizer = true,
+        use_vanilla_enemy_logic = false,
+        use_vanilla_item_logic = false,
         debug_mode = false,
         action_kill_all_enemies = false,
         action_reset_darktide_defaults = false,
@@ -775,6 +783,18 @@ local function _build_darktide_baseline_settings()
         end
     end
 
+    local reset_disabled_breeds = RandomizerData.reset_default_disabled_enemy_breeds or {}
+    local setting_by_breed = RandomizerData.enemy_disable_setting_by_breed or {}
+
+    for i = 1, #reset_disabled_breeds do
+        local breed_name = reset_disabled_breeds[i]
+        local setting_id = setting_by_breed[breed_name]
+
+        if type(setting_id) == "string" then
+            baseline[setting_id] = true
+        end
+    end
+
     return baseline
 end
 
@@ -794,6 +814,16 @@ local mod_data = {
                         setting_id = "enable_randomizer",
                         type = "checkbox",
                         default_value = true,
+                    },
+                    {
+                        setting_id = "use_vanilla_enemy_logic",
+                        type = "checkbox",
+                        default_value = false,
+                    },
+                    {
+                        setting_id = "use_vanilla_item_logic",
+                        type = "checkbox",
+                        default_value = false,
                     },
                     {
                         setting_id = "debug_mode",

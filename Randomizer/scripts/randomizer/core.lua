@@ -224,6 +224,8 @@ function Core:_refresh_config()
 
     local fallback = {
         enable_randomizer = true,
+        use_vanilla_enemy_logic = false,
+        use_vanilla_item_logic = false,
         debug_mode = false,
         seed_value = 0,
         use_random_seed = true,
@@ -302,7 +304,16 @@ function Core:on_setting_changed(setting_id)
         return
     end
 
-    self:_refresh_config()
+    local config = self:_refresh_config()
+
+    if setting_id == "use_vanilla_enemy_logic" and config and config.use_vanilla_enemy_logic == true then
+        local enemy_runtime = self.state.enemy_runtime
+
+        if enemy_runtime then
+            enemy_runtime.pending_despawn_units = {}
+        end
+    end
+
     self:_handle_action_setting(setting_id)
 
     if self.settings.is_seed_related_setting(setting_id) then
@@ -527,6 +538,10 @@ function Core:randomize_enemy(requested_breed, context)
         return requested_breed
     end
 
+    if config.use_vanilla_enemy_logic == true then
+        return requested_breed
+    end
+
     return self.enemy_randomizer.randomize(self, requested_breed, context, config)
 end
 
@@ -534,6 +549,10 @@ function Core:randomize_item(requested_pickup, context)
     local can_randomize, config = self:should_randomize()
 
     if not can_randomize then
+        return requested_pickup
+    end
+
+    if config.use_vanilla_item_logic == true then
         return requested_pickup
     end
 
