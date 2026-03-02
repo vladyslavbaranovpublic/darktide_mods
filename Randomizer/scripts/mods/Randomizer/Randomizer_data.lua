@@ -234,7 +234,7 @@ RandomizerData.blocked_randomizer_enemy_name_patterns = {
 -- Enemy breeds that should default to "disabled" when running the baseline reset action.
 RandomizerData.reset_default_disabled_enemy_breeds = {
     "cultist_ritualist",
-    "cultist_flamer",
+    "chaos_mutator_ritualist",
 }
 
 local MINION_BREED_TYPE = BreedSettings.types.minion
