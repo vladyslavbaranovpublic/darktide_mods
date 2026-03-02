@@ -1,8 +1,8 @@
 --[[
     File: Randomizer_localization.lua
     Description: Localization strings for Randomizer labels, descriptions, and UI text.
-    Overall Release Version: 1.0.0
-    File Version: 1.0.0
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
     File Introduced in: 1.0.0
     Last Updated: 2026-02-28
     Author: LAUREHTE
@@ -24,7 +24,7 @@ local localizations = {
         en = "{#color(70,205,195)}\xEE\x80\xAA Randomizer \xEE\x80\xAB{#reset()}",
     },
     mod_description = {
-        en = "{#color(90,220,210)}Release 1.0.0{#reset()} | Author: LAUREHTE\n{#color(60,175,165)}Randomizes enemy and item spawns in local-controlled missions with seed support, fine-tuning, and optional chaos mode.{#reset()}",
+        en = "{#color(90,220,210)}Release 1.0.1{#reset()} | Author: LAUREHTE\n{#color(60,175,165)}Randomizes enemy and item spawns in local-controlled missions with seed support, fine-tuning, and optional chaos mode.{#reset()}",
     },
 
     group_randomizer_general = {
@@ -47,6 +47,12 @@ local localizations = {
     },
     action_kill_all_enemies_description = {
         en = "One-shot action. Set this to On to despawn all currently spawned enemy minions, then it auto-resets to Off. Local-host only.",
+    },
+    action_reset_darktide_defaults = {
+        en = "Reset To Darktide Baseline (Execute)",
+    },
+    action_reset_darktide_defaults_description = {
+        en = "One-shot action. Restores Randomizer settings to baseline default values, including category/source/archetype weights and enemy override checkboxes, then auto-resets to Off.",
     },
     seed_value = {
         en = "Seed (Optional)",
@@ -325,7 +331,7 @@ local localizations = {
         en = "Item Spawn Rate Multiplier",
     },
     item_spawn_rate_multiplier_description = {
-        en = "Scales mission pickup counts (1.0x-10.0x) and performs an extra fill pass on empty valid item locations. Higher values populate more spawn points; 10.0x aggressively fills almost all eligible non-side-mission spots.",
+        en = "Scales mission pickup counts (1.0x-10.0x) and performs an extra fill pass on empty valid item locations. Only applies when Item category is enabled and Item weight is above 0.",
     },
     disable_material_spawns = {
         en = "Disable Material Spawns",

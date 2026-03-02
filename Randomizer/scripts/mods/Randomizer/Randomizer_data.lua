@@ -1,8 +1,8 @@
 --[[
     File: Randomizer_data.lua
     Description: Mod settings, spawn pools, weight tables, and difficulty scaling data.
-    Overall Release Version: 1.0.0
-    File Version: 1.0.0
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
     File Introduced in: 1.0.0
     Last Updated: 2026-02-28
     Author: LAUREHTE
@@ -200,6 +200,8 @@ RandomizerData.safety = {
     -- Extra enemy spawn controls from enemy spawn rate multiplier.
     max_extra_enemies_alive = 100,
     max_extra_enemies_per_mission = 2000,
+    -- Delay extra randomizer-created enemies at mission start to avoid pre-pacing spikes.
+    extra_enemy_warmup_seconds = 20,
     -- How many update passes a pending strict-despawn unit can be retried before dropping.
     max_pending_enemy_despawn_retries = 30,
 }
@@ -638,6 +640,146 @@ local function _build_enemy_override_group_widget()
     }
 end
 
+local CATEGORY_ENABLED_SETTING = {
+    regular = "randomize_regular_enemies",
+    elites = "randomize_elites",
+    specials = "randomize_specials",
+    bosses = "randomize_bosses",
+    patrols = "randomize_patrols",
+    hordes = "randomize_hordes",
+    items = "randomize_items",
+}
+
+local CATEGORY_WEIGHT_SETTING = {
+    regular = "weight_regular",
+    elites = "weight_elites",
+    specials = "weight_specials",
+    bosses = "weight_bosses",
+    patrols = "weight_patrols",
+    hordes = "weight_hordes",
+    items = "weight_items",
+}
+
+local ITEM_CLASS_WEIGHT_SETTING = {
+    stims = "item_weight_stims",
+    medkits = "item_weight_medkits",
+    ammo = "item_weight_ammo",
+    grenades = "item_weight_grenades",
+    materials = "item_weight_materials",
+    deployables = "item_weight_deployables",
+    pocketables = "item_weight_pocketables",
+    misc = "item_weight_misc",
+}
+
+local ITEM_SPECIFIC_WEIGHT_SETTING = {
+    ammo_crate = "item_weight_ammo_crate",
+}
+
+local SOURCE_WEIGHT_SETTING = {
+    roamer = "source_weight_roamer",
+    horde = "source_weight_horde",
+    patrol = "source_weight_patrol",
+    special_event = "source_weight_special_event",
+    monster_event = "source_weight_monster_event",
+    scripted = "source_weight_scripted",
+    unknown = "source_weight_unknown",
+}
+
+local ARCHETYPE_WEIGHT_SETTING = {
+    regular_melee = "archetype_weight_regular_melee",
+    regular_ranged = "archetype_weight_regular_ranged",
+    elite_melee = "archetype_weight_elite_melee",
+    elite_ranged = "archetype_weight_elite_ranged",
+    elite_ogryn = "archetype_weight_elite_ogryn",
+    special_disabler = "archetype_weight_special_disabler",
+    special_ranged = "archetype_weight_special_ranged",
+    special_aoe = "archetype_weight_special_aoe",
+    boss_monstrosity = "archetype_weight_boss_monstrosity",
+    boss_captain = "archetype_weight_boss_captain",
+}
+
+local function _build_darktide_baseline_settings()
+    local baseline = {
+        enable_randomizer = true,
+        debug_mode = false,
+        action_kill_all_enemies = false,
+        action_reset_darktide_defaults = false,
+        seed_value = 0,
+        use_random_seed = true,
+        random_every_mission = false,
+        enable_fine_tuning = true,
+        enable_chaos_mode = false,
+        enable_difficulty_scaling = true,
+        enemy_spawn_rate_multiplier = 1.0,
+        max_alive_enemies_cap = 0,
+        strict_enemy_weight_enforcement = false,
+        remove_boss_alive_limit = false,
+        enable_refined_enemy_weights = false,
+        item_spawn_rate_multiplier = 1.0,
+        disable_material_spawns = false,
+        spawn_extra_random_items = false,
+        extra_random_item_chance = 0,
+        extra_random_item_max_per_mission = 0,
+    }
+
+    for i = 1, #RandomizerData.category_order do
+        local category = RandomizerData.category_order[i]
+        local enabled_setting = CATEGORY_ENABLED_SETTING[category]
+        local weight_setting = CATEGORY_WEIGHT_SETTING[category]
+
+        if type(enabled_setting) == "string" then
+            baseline[enabled_setting] = true
+        end
+
+        if type(weight_setting) == "string" then
+            baseline[weight_setting] = math.max(0, math.floor(tonumber(RandomizerData.default_weights[category]) or 0))
+        end
+    end
+
+    for i = 1, #RandomizerData.item_class_order do
+        local item_class = RandomizerData.item_class_order[i]
+        local setting_id = ITEM_CLASS_WEIGHT_SETTING[item_class]
+
+        if type(setting_id) == "string" then
+            baseline[setting_id] = math.max(0, math.floor(tonumber(RandomizerData.item_class_default_weights[item_class]) or 0))
+        end
+    end
+
+    for item_key, setting_id in pairs(ITEM_SPECIFIC_WEIGHT_SETTING) do
+        if type(setting_id) == "string" then
+            baseline[setting_id] = math.max(0, math.floor(tonumber(RandomizerData.item_specific_default_weights[item_key]) or 0))
+        end
+    end
+
+    for i = 1, #RandomizerData.source_weight_order do
+        local source_name = RandomizerData.source_weight_order[i]
+        local setting_id = SOURCE_WEIGHT_SETTING[source_name]
+
+        if type(setting_id) == "string" then
+            baseline[setting_id] = math.max(0, math.floor(tonumber(RandomizerData.source_default_weights[source_name]) or 100))
+        end
+    end
+
+    for i = 1, #RandomizerData.enemy_archetype_order do
+        local archetype = RandomizerData.enemy_archetype_order[i]
+        local setting_id = ARCHETYPE_WEIGHT_SETTING[archetype]
+
+        if type(setting_id) == "string" then
+            baseline[setting_id] = math.max(0, math.floor(tonumber(RandomizerData.enemy_archetype_default_weights[archetype]) or 100))
+        end
+    end
+
+    for _, setting_id in pairs(RandomizerData.enemy_disable_setting_by_breed or {}) do
+        if type(setting_id) == "string" then
+            baseline[setting_id] = false
+        end
+    end
+
+    return baseline
+end
+
+RandomizerData.darktide_baseline_settings = _build_darktide_baseline_settings()
+
 local mod_data = {
     name = mod:localize("mod_name"),
     description = mod:localize("mod_description"),
@@ -660,6 +802,11 @@ local mod_data = {
                     },
                     {
                         setting_id = "action_kill_all_enemies",
+                        type = "checkbox",
+                        default_value = false,
+                    },
+                    {
+                        setting_id = "action_reset_darktide_defaults",
                         type = "checkbox",
                         default_value = false,
                     },

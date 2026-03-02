@@ -1,8 +1,8 @@
 --[[
     File: utils.lua
     Description: Shared helper utilities for safety checks, weighted picks, and setting reads.
-    Overall Release Version: 1.0.0
-    File Version: 1.0.0
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
     File Introduced in: 1.0.0
     Last Updated: 2026-02-28
     Author: LAUREHTE

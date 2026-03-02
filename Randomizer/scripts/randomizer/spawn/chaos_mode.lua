@@ -1,8 +1,8 @@
 --[[
     File: chaos_mode.lua
     Description: Chaos mode rules that bypass category and weight constraints.
-    Overall Release Version: 1.0.0
-    File Version: 1.0.0
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
     File Introduced in: 1.0.0
     Last Updated: 2026-02-28
     Author: LAUREHTE
@@ -36,6 +36,8 @@ local function _is_candidate_compatible(core, candidate, config, requested_meta)
 
     local request_is_patrol = requested_meta and requested_meta.is_patrol == true or false
     local candidate_is_patrol = candidate_meta.is_patrol == true
+    local request_is_boss = requested_meta and requested_meta.is_boss == true or false
+    local candidate_is_boss = candidate_meta.is_boss == true
 
     if request_is_patrol and not candidate_is_patrol then
         -- Patrol requests require patrol-capable breeds or patrol systems can nil-index.
@@ -45,6 +47,22 @@ local function _is_candidate_compatible(core, candidate, config, requested_meta)
     if not request_is_patrol and candidate_is_patrol then
         -- Patrol-only breeds in non-patrol requests can assume missing patrol state.
         return false
+    end
+
+    if request_is_boss and not candidate_is_boss then
+        return false
+    end
+
+    if request_is_boss and candidate_is_boss then
+        local requested_archetype = requested_meta and requested_meta.archetype
+        local candidate_archetype = candidate_meta and candidate_meta.archetype
+
+        if type(requested_archetype) == "string"
+            and type(candidate_archetype) == "string"
+            and requested_archetype ~= candidate_archetype
+        then
+            return false
+        end
     end
 
     return true

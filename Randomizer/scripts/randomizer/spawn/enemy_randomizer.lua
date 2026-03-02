@@ -1,8 +1,8 @@
 --[[
     File: enemy_randomizer.lua
     Description: Enemy spawn replacement logic with category weighting and difficulty scaling.
-    Overall Release Version: 1.0.0
-    File Version: 1.0.0
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
     File Introduced in: 1.0.0
     Last Updated: 2026-02-28
     Author: LAUREHTE
@@ -179,6 +179,24 @@ local function _is_compatible_replacement(core, requested_breed, requested_meta,
 
     local requested_is_boss = requested_meta and requested_meta.is_boss == true or false
     local candidate_is_boss = candidate_meta.is_boss == true
+
+    if requested_is_boss and not candidate_is_boss then
+        return false
+    end
+
+    if requested_is_boss and candidate_is_boss then
+        local requested_archetype = requested_meta and requested_meta.archetype
+        local candidate_archetype = candidate_meta and candidate_meta.archetype
+
+        if type(requested_archetype) == "string"
+            and type(candidate_archetype) == "string"
+            and requested_archetype ~= candidate_archetype
+        then
+            -- Boss mutator/script flows can assume specific boss extension contracts.
+            -- Keep replacement within the same boss archetype family.
+            return false
+        end
+    end
 
     if candidate_is_boss and not requested_is_boss then
         -- Outside chaos mode, bosses should only come from the explicit boss category.

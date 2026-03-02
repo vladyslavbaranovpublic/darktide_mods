@@ -1,8 +1,8 @@
 --[[
     File: Randomizer.lua
     Description: Main entry point for the Randomizer mod and module bootstrap.
-    Overall Release Version: 1.0.0
-    File Version: 1.0.0
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
     File Introduced in: 1.0.0
     Last Updated: 2026-02-28
     Author: LAUREHTE

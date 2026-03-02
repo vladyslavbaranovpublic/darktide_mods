@@ -1,8 +1,8 @@
 --[[
     File: core.lua
     Description: Core runtime state manager for seed lifecycle and randomization dispatch.
-    Overall Release Version: 1.0.0
-    File Version: 1.0.0
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
     File Introduced in: 1.0.0
     Last Updated: 2026-02-28
     Author: LAUREHTE
@@ -20,6 +20,7 @@ local ENEMY_WEIGHT_CATEGORIES = {
     "hordes",
 }
 local ACTION_KILL_ALL_ENEMIES_SETTING = "action_kill_all_enemies"
+local ACTION_RESET_DARKTIDE_DEFAULTS_SETTING = "action_reset_darktide_defaults"
 
 local function _table_size(t)
     local count = 0
@@ -76,6 +77,7 @@ function Core.new(deps)
             next_check_t = 0,
         },
         config_cache = nil,
+        applying_settings_preset = false,
         pools = {
             enemies = {
                 all = {},
@@ -296,6 +298,10 @@ function Core:on_disabled()
 end
 
 function Core:on_setting_changed(setting_id)
+    if self.state and self.state.applying_settings_preset == true then
+        return
+    end
+
     self:_refresh_config()
     self:_handle_action_setting(setting_id)
 
@@ -305,32 +311,78 @@ function Core:on_setting_changed(setting_id)
 end
 
 function Core:_handle_action_setting(setting_id)
-    if setting_id ~= ACTION_KILL_ALL_ENEMIES_SETTING then
-        return
-    end
-
     if not self.mod or type(self.mod.get) ~= "function" or type(self.mod.set) ~= "function" then
         return
     end
 
-    local should_execute = self.mod:get(ACTION_KILL_ALL_ENEMIES_SETTING) == true
+    if setting_id == ACTION_KILL_ALL_ENEMIES_SETTING then
+        local should_execute = self.mod:get(ACTION_KILL_ALL_ENEMIES_SETTING) == true
 
-    if not should_execute then
-        return
-    end
+        if not should_execute then
+            return
+        end
 
-    if not self:_is_local_controlled_session_cached() then
-        self:_log_error("Kill All Enemies is only available in local-controlled sessions.")
+        if not self:_is_local_controlled_session_cached() then
+            self:_log_error("Kill All Enemies is only available in local-controlled sessions.")
+            self.mod:set(ACTION_KILL_ALL_ENEMIES_SETTING, false, true)
+
+            return
+        end
+
+        local despawned = self:kill_all_enemies()
+        local config = self:get_config()
+
+        self:_log_debug(string.format("[Randomizer] Kill-all action executed. Despawned %d enemies.", despawned), config)
         self.mod:set(ACTION_KILL_ALL_ENEMIES_SETTING, false, true)
 
         return
     end
 
-    local despawned = self:kill_all_enemies()
-    local config = self:get_config()
+    if setting_id == ACTION_RESET_DARKTIDE_DEFAULTS_SETTING then
+        local should_execute = self.mod:get(ACTION_RESET_DARKTIDE_DEFAULTS_SETTING) == true
 
-    self:_log_debug(string.format("[Randomizer] Kill-all action executed. Despawned %d enemies.", despawned), config)
-    self.mod:set(ACTION_KILL_ALL_ENEMIES_SETTING, false, true)
+        if not should_execute then
+            return
+        end
+
+        local applied = self:reset_settings_to_darktide_baseline()
+
+        self.mod:set(ACTION_RESET_DARKTIDE_DEFAULTS_SETTING, false, true)
+        self:_log_debug(string.format("[Randomizer] Reset applied: %d settings restored to Darktide baseline.", applied), self:get_config())
+    end
+end
+
+function Core:reset_settings_to_darktide_baseline()
+    local baseline = self.data and self.data.darktide_baseline_settings
+
+    if type(baseline) ~= "table" then
+        return 0
+    end
+
+    if not self.mod or type(self.mod.set) ~= "function" then
+        return 0
+    end
+
+    local applied = 0
+
+    self.state.applying_settings_preset = true
+
+    for setting_id, value in pairs(baseline) do
+        if type(setting_id) == "string" then
+            local ok = pcall(self.mod.set, self.mod, setting_id, value, true)
+
+            if ok then
+                applied = applied + 1
+            end
+        end
+    end
+
+    self.state.applying_settings_preset = false
+
+    self:_refresh_config()
+    self:refresh_seed("reset_darktide_baseline", true)
+
+    return applied
 end
 
 function Core:kill_all_enemies()
@@ -573,6 +625,7 @@ function Core:can_spawn_extra_enemy(config, context)
     local safety = self.data.safety or {}
     local max_alive = math.max(0, math.floor(tonumber(safety.max_extra_enemies_alive) or 80))
     local max_per_mission = math.max(0, math.floor(tonumber(safety.max_extra_enemies_per_mission) or 2000))
+    local extra_warmup = math.max(0, tonumber(safety.extra_enemy_warmup_seconds) or 20)
 
     if runtime.extra_alive >= max_alive then
         return false
@@ -582,11 +635,27 @@ function Core:can_spawn_extra_enemy(config, context)
         return false
     end
 
+    local now = self.utils.get_gameplay_time()
+    local boss_runtime = self.state.boss_runtime
+    local mission_start_t = boss_runtime and tonumber(boss_runtime.mission_start_t) or 0
+
+    if now and now - mission_start_t < extra_warmup then
+        return false
+    end
+
     local optional_param_table = context and context.optional_param_table
     local is_grouped_spawn = type(optional_param_table) == "table" and optional_param_table.optional_group_id ~= nil
 
     if is_grouped_spawn then
         -- Never inject extra units into a game-managed group; this can break patrol/group AI contracts.
+        return false
+    end
+
+    local requested_breed = context and context.requested_breed
+    local spawn_source = self:get_enemy_spawn_source(requested_breed, optional_param_table)
+
+    if spawn_source == "scripted" or spawn_source == "monster_event" then
+        -- Do not multiply heavily scripted or mutator monster spawns.
         return false
     end
 

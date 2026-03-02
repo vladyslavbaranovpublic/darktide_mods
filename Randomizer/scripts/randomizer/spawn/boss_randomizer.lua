@@ -1,8 +1,8 @@
 --[[
     File: boss_randomizer.lua
     Description: Boss-specific helper logic for identifying and selecting boss enemies.
-    Overall Release Version: 1.0.0
-    File Version: 1.0.0
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
     File Introduced in: 1.0.0
     Last Updated: 2026-02-28
     Author: LAUREHTE

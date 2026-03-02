@@ -1,8 +1,8 @@
 --[[
     File: spawn_hooks.lua
     Description: Hook registration for mission start, enemy spawns, and item spawns.
-    Overall Release Version: 1.0.0
-    File Version: 1.0.0
+    Overall Release Version: 1.0.1
+    File Version: 1.0.1
     File Introduced in: 1.0.0
     Last Updated: 2026-02-28
     Author: LAUREHTE
@@ -509,6 +509,13 @@ function SpawnHooks.register(mod, core)
             return func(self, pickup_spawners, distribution_type, pickup_pool, seed)
         end
 
+        local items_enabled = config.categories and config.categories.items ~= false
+        local item_weight = tonumber(config.weights and config.weights.items) or 0
+
+        if not items_enabled or item_weight <= 0 then
+            return func(self, pickup_spawners, distribution_type, pickup_pool, seed)
+        end
+
         local multiplier = core.utils.clamp(tonumber(config.item_spawn_rate_multiplier) or 1.0, 1.0, 10.0)
 
         if multiplier <= 1.0 then
@@ -548,6 +555,11 @@ function SpawnHooks.register(mod, core)
 
     mod:hook("PickupSystem", "spawn_pickup", function(func, self, pickup_name, position, rotation, optional_pickup_spawner, optional_placed_on_unit, optional_spawn_interaction_cooldown, optional_origin_player, skip_group)
         if not core or not mod:is_enabled() then
+            return func(self, pickup_name, position, rotation, optional_pickup_spawner, optional_placed_on_unit, optional_spawn_interaction_cooldown, optional_origin_player, skip_group)
+        end
+
+        if optional_origin_player ~= nil then
+            -- Player-origin pickup spawns (drops/ability-driven flows) should stay vanilla.
             return func(self, pickup_name, position, rotation, optional_pickup_spawner, optional_placed_on_unit, optional_spawn_interaction_cooldown, optional_origin_player, skip_group)
         end
 
