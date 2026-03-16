@@ -1,6 +1,6 @@
 --[[
 	File: AuspexHelper_localization.lua
-	Description: Localization for Aspex Helper.
+	Description: Localization for Auspex Helper.
 	Overall Release Version: 1.0.0
 	File Version: 1.0.0
 	File Introduced in: 1.0.0
@@ -12,7 +12,7 @@ local mod = get_mod("AuspexHelper")
 
 return {
 	mod_name = {
-		en = "{#color(80,255,160)}\xEE\x80\xAA Aspex Helper \xEE\x80\xAA{#reset()}",
+		en = "{#color(80,255,160)}\xEE\x80\xAA Auspex Helper \xEE\x80\xAA{#reset()}",
 	},
 	mod_description = {
 		en = "{#color(120,255,180)}Release 1.0.0{#reset()} | Author: LAUREHTE\n{#color(90,220,150)}Scanner helpers, world-scan overlays, practice mode, and minigame assists.{#reset()}",
@@ -21,7 +21,7 @@ return {
 		en = "{#color(80,255,160)}Enable ---------------------------------------------------------------------------------{#reset()}",
 	},
 	enable_group_desc = {
-		en = "Master on or off controls for Aspex Helper and each supported minigame path.",
+		en = "Master on or off controls for Auspex Helper and each supported minigame path.",
 	},
 	enable_mod_override = {
 		en = "Enable mod",
@@ -240,7 +240,7 @@ return {
 		en = "Decode Symbols",
 	},
 	enable_decode_minigame_desc = {
-		en = "Enable the decode-symbol minigame path in Aspex Helper.",
+		en = "Enable the decode-symbol minigame path in Auspex Helper.",
 	},
 	enable_decode_helper = {
 		en = "Highlight decode targets",
@@ -284,6 +284,36 @@ return {
 	future_rows_3 = {
 		en = "3 future rows",
 	},
+	expedition_group = {
+		en = "{#color(80,255,160)}Expedition Minigame --------------------------------------------------------------{#reset()}",
+	},
+	expedition_group_desc = {
+		en = "Reserved scaffold for an unreleased expedition scanner minigame that appears to match 2x2 symbol groups on a grid.",
+	},
+	enable_expedition_helper = {
+		en = "Highlight symbol groups",
+	},
+	enable_expedition_helper_desc = {
+		en = "Placeholder helper toggle for expedition symbol-group matches on the grid.",
+	},
+	enable_expedition_autosolve = {
+		en = "Auto solve",
+	},
+	enable_expedition_autosolve_desc = {
+		en = "Placeholder autosolve toggle for the expedition minigame once the live API is exposed.",
+	},
+	expedition_interact_cooldown = {
+		en = "Interact cooldown (ms)",
+	},
+	expedition_interact_cooldown_desc = {
+		en = "Placeholder delay between expedition auto-solve interactions.",
+	},
+	expedition_target_precision = {
+		en = "Target precision",
+	},
+	expedition_target_precision_desc = {
+		en = "Placeholder precision for expedition 2x2 symbol-group matching.",
+	},
 	drill_group = {
 		en = "{#color(80,255,160)}Drill and Tree (Hab Drayko) --------------------------------------------------{#reset()}",
 	},
@@ -294,7 +324,7 @@ return {
 		en = "Drill and Tree (Hab Drayko)",
 	},
 	enable_drill_minigame_desc = {
-		en = "Enable the drill and tree minigame path in Aspex Helper.",
+		en = "Enable the drill and tree minigame path in Auspex Helper.",
 	},
 	enable_drill_helper = {
 		en = "Highlight drill targets",
@@ -336,7 +366,13 @@ return {
 		en = "Frequency",
 	},
 	enable_frequency_minigame_desc = {
-		en = "Enable the frequency minigame path in Aspex Helper.",
+		en = "Enable the frequency minigame path in Auspex Helper.",
+	},
+	enable_frequency_direction_arrows = {
+		en = "Show direction arrows",
+	},
+	enable_frequency_direction_arrows_desc = {
+		en = "Show directional arrows for the adjustments needed to match the target frequency.",
 	},
 	enable_frequency_autosolve = {
 		en = "Auto tune",
@@ -360,7 +396,7 @@ return {
 		en = "Balance (Rolling Steel)",
 	},
 	enable_balance_minigame_desc = {
-		en = "Enable the balance minigame path in Aspex Helper.",
+		en = "Enable the balance minigame path in Auspex Helper.",
 	},
 	enable_expedition_minigame = {
 		en = "Expedition Minigame",
@@ -474,10 +510,10 @@ return {
 		en = "Auspex practice could not build the selected scanner minigame.",
 	},
 	preview_type_disabled = {
-		en = "That practice minigame path is disabled in Aspex Helper settings.",
+		en = "That practice minigame path is disabled in Auspex Helper settings.",
 	},
 	preview_type_expedition_placeholder = {
-		en = "Expedition Minigame is scaffolded in Aspex Helper, but this game build does not expose any usable expedition scanner logic or UI yet.",
+		en = "Expedition Minigame is scaffolded in Auspex Helper, but this game build does not expose any usable expedition scanner logic or UI yet.",
 	},
 	practice_item_hub_unavailable = {
 		en = "Practice item mode is not safe in the hub on this build. Overlay mode was opened instead.",

@@ -1,6 +1,6 @@
 --[[
 	File: AuspexHelper.lua
-	Description: Main entry point for the Aspex Helper mod and module bootstrap.
+	Description: Main entry point for the Auspex Helper mod and module bootstrap.
 	Overall Release Version: 1.0.0
 	File Version: 1.0.0
 	File Introduced in: 1.0.0
@@ -97,6 +97,10 @@ local scanner_fade_speed = 0
 local scanner_subtitle_hook_applied = false
 local decode_same_targets_count = 0
 local decode_autosolve_cooldown = 0
+local decode_autosolve_press_deadline = 0
+local expedition_same_targets_count = 0
+local expedition_autosolve_cooldown = 0
+local expedition_autosolve_press_deadline = 0
 local frequency_autosolve_submit_cooldown = 0
 local balance_cursor_x = 0
 local balance_cursor_y = 0
@@ -107,8 +111,11 @@ local balance_velocity_y = 0
 local balance_distance = 0
 local balance_input_window = 0
 local EMPTY_WIDGETS_BY_NAME = {}
+local DECODE_TARGET_FILL_ALPHA = 18
 local _sync_scanner_hud_visibility
+local _active_live_minigame
 local _active_decode_autosolve_minigame
+local _active_expedition_autosolve_minigame
 local _active_frequency_autosolve_minigame
 
 if not math.clamp then
@@ -218,7 +225,7 @@ _world_scan_always_show = function()
 end
 
 _world_scan_effective_active = function()
-	return _world_scan_always_show() or scanner_world_helper_active
+	return _world_scan_always_show() or scanner_world_helper_active or scanner_equipped_active or scanner_searching_active
 end
 
 _world_scan_show_through_walls = function()
@@ -370,7 +377,9 @@ _world_scan_player_context = function()
 end
 
 _world_scan_has_active_scannables = function()
-	scannable_units = _world_scan_collect_scannable_units(_world_scan_always_show())
+	if not scannable_units or next(scannable_units) == nil then
+		_refresh_scannable_units()
+	end
 
 	for scannable_unit, _ in pairs(scannable_units) do
 		if Unit.alive(scannable_unit) then
@@ -383,6 +392,17 @@ _world_scan_has_active_scannables = function()
 	end
 
 	return false
+end
+
+_request_world_scan_refresh = function(force_now)
+	mod._world_scan_next_refresh_t = nil
+	mod._world_scan_next_visibility_refresh_t = nil
+
+	if force_now and (_world_scan_effective_active() or scanner_searching_active or scanner_overlay_active) then
+		_set_world_scan_highlights(_world_scan_effective_active())
+		_refresh_world_scan_overlay_view()
+		_refresh_world_scan_icons_view()
+	end
 end
 
 _world_scan_unit_is_visible = function(scannable_unit, scannable_extension)
@@ -437,8 +457,24 @@ local function _is_minigame_enabled(minigame_type)
 	return mod:get(setting_id) ~= false
 end
 
+local function _tag_minigame_type(minigame, minigame_type)
+	if type(minigame) == "table" and minigame_type ~= nil then
+		minigame._auspex_helper_minigame_type = minigame_type
+	end
+
+	return minigame
+end
+
+local function _minigame_type_hint(minigame)
+	return type(minigame) == "table" and (rawget(minigame, "_auspex_helper_minigame_type") or rawget(minigame, "_minigame_type")) or nil
+end
+
 local function _should_highlight_decode_targets()
 	return _is_minigame_enabled(MinigameSettings.types.decode_symbols) and mod:get("enable_decode_helper")
+end
+
+local function _should_highlight_expedition_targets()
+	return _is_minigame_enabled(EXPEDITION_MINIGAME_TYPE) and mod:get("enable_expedition_helper") ~= false
 end
 
 local function _should_highlight_drill_targets()
@@ -467,6 +503,10 @@ end
 
 local function _is_decode_autosolve_enabled()
 	return _is_minigame_enabled(MinigameSettings.types.decode_symbols) and mod:get("enable_decode_autosolve")
+end
+
+local function _is_expedition_autosolve_enabled()
+	return _is_minigame_enabled(EXPEDITION_MINIGAME_TYPE) and mod:get("enable_expedition_autosolve")
 end
 
 local function _is_frequency_autosolve_enabled()
@@ -850,6 +890,13 @@ end
 local function _reset_decode_autosolve()
 	decode_same_targets_count = 0
 	decode_autosolve_cooldown = 0
+	decode_autosolve_press_deadline = 0
+end
+
+local function _reset_expedition_autosolve()
+	expedition_same_targets_count = 0
+	expedition_autosolve_cooldown = 0
+	expedition_autosolve_press_deadline = 0
 end
 
 local function _reset_frequency_autosolve()
@@ -859,15 +906,110 @@ end
 _reset_drill_autosolve = function()
 	mod._drill_autosolve_move_cooldown = 0
 	mod._drill_autosolve_submit_cooldown = 0
+	mod._drill_autosolve_press_deadline = 0
+	mod._drill_autosolve_release_deadline = 0
+	mod._drill_autosolve_second_press_deadline = 0
 	mod._drill_autosolve_force_release = false
+	mod._drill_autosolve_stage = nil
+	mod._drill_autosolve_minigame = nil
+	mod._drill_autosolve_stage_ready_time = 0
+	mod._drill_autosolve_selected_stage = nil
+	mod._drill_autosolve_selected_index = nil
+	mod._drill_autosolve_selected_at = 0
+end
+
+mod._sync_drill_autosolve_stage = function(minigame)
+	if not _looks_like_drill_minigame(minigame) then
+		mod._drill_autosolve_stage = nil
+
+		return
+	end
+
+	local current_stage = minigame:current_stage()
+
+	if mod._drill_autosolve_stage == current_stage then
+		return
+	end
+
+	mod._drill_autosolve_stage = current_stage
+	mod._drill_autosolve_submit_cooldown = 0
+	mod._drill_autosolve_press_deadline = 0
+	mod._drill_autosolve_release_deadline = 0
+	mod._drill_autosolve_second_press_deadline = 0
+	mod._drill_autosolve_force_release = false
+	mod._drill_autosolve_stage_ready_time = _gameplay_time() + 0.05
+	mod._drill_autosolve_selected_stage = current_stage
+	mod._drill_autosolve_selected_index = nil
+	mod._drill_autosolve_selected_at = 0
+end
+
+mod._sync_drill_autosolve_minigame = function(minigame)
+	if mod._drill_autosolve_minigame == minigame then
+		return
+	end
+
+	mod._drill_autosolve_minigame = minigame
+	_reset_drill_autosolve()
+	mod._drill_autosolve_minigame = minigame
 end
 
 local function _decode_autosolve_cooldown_seconds()
 	return (mod:get("decode_interact_cooldown") or 150) * 0.001
 end
 
+local function _expedition_autosolve_cooldown_seconds()
+	return (mod:get("expedition_interact_cooldown") or 150) * 0.001
+end
+
 local function _decode_target_precision()
 	return (mod:get("decode_target_precision") or 4) * 0.1
+end
+
+local function _expedition_target_precision()
+	return (mod:get("expedition_target_precision") or 4) * 0.1
+end
+
+_is_networked_live_session = function()
+	local connection_manager = Managers.connection
+	local host_type = connection_manager and connection_manager.host_type and connection_manager:host_type() or nil
+
+	return host_type ~= nil and host_type ~= "singleplay" and host_type ~= "singleplay_backend_session"
+end
+
+_is_networked_live_minigame = function(minigame)
+	return minigame ~= nil and not practice_session and _is_networked_live_session() and minigame == (_active_live_minigame and _active_live_minigame() or nil)
+end
+
+_decode_autosolve_prediction_seconds = function(minigame)
+	if _is_networked_live_minigame(minigame) then
+		return 0.06
+	end
+
+	return 0
+end
+
+_decode_autosolve_press_window_seconds = function(minigame)
+	if _is_networked_live_minigame(minigame) then
+		return 0.09
+	end
+
+	return 0.035
+end
+
+local function _expedition_autosolve_prediction_seconds(minigame)
+	if _is_networked_live_minigame(minigame) then
+		return 0.06
+	end
+
+	return 0
+end
+
+local function _expedition_autosolve_press_window_seconds(minigame)
+	if _is_networked_live_minigame(minigame) then
+		return 0.09
+	end
+
+	return 0.035
 end
 
 local function _frequency_autosolve_strength()
@@ -907,15 +1049,81 @@ local function _is_decode_on_target(minigame, time, stage_offset)
 	end
 
 	local precision = _decode_target_precision()
+
+	if _is_networked_live_minigame(minigame) then
+		precision = math.max(0.05, precision - 0.08)
+	end
+
 	local target_margin = 1 / (minigame._decode_symbols_items_per_stage - 1) * sweep_duration
 	local start_target = (target - (1.5 - precision)) * target_margin
 	local end_target = (target - (0.5 + precision)) * target_margin
-	local cursor_time = minigame:_calculate_cursor_time(time)
+	local cursor_time = minigame:_calculate_cursor_time(time + _decode_autosolve_prediction_seconds(minigame))
+
+	return cursor_time > start_target and cursor_time < end_target
+end
+
+local function _is_expedition_on_target(minigame, time, stage_offset)
+	if not minigame or not time then
+		return false
+	end
+
+	local current_stage = minigame._current_stage
+
+	if not current_stage then
+		return false
+	end
+
+	current_stage = current_stage + (stage_offset or 0)
+
+	local sweep_duration = minigame._decode_symbols_sweep_duration
+	local targets = minigame._decode_targets or {}
+	local target = targets[current_stage]
+
+	if not target then
+		return false
+	end
+
+	local precision = _expedition_target_precision()
+
+	if _is_networked_live_minigame(minigame) then
+		precision = math.max(0.05, precision - 0.08)
+	end
+
+	local target_margin = 1 / (minigame._decode_symbols_items_per_stage - 1) * sweep_duration
+	local start_target = (target - (1.5 - precision)) * target_margin
+	local end_target = (target - (0.5 + precision)) * target_margin
+	local cursor_time = minigame:_calculate_cursor_time(time + _expedition_autosolve_prediction_seconds(minigame))
 
 	return cursor_time > start_target and cursor_time < end_target
 end
 
 local function _count_decode_same_targets(minigame)
+	if not minigame then
+		return 0
+	end
+
+	local current_stage = minigame._current_stage
+	local targets = minigame._decode_targets
+
+	if not current_stage or not targets or next(targets) == nil then
+		return 0
+	end
+
+	local current_target = targets[current_stage]
+	local count = 0
+
+	for index = current_stage, #targets do
+		if targets[index] == current_target then
+			count = count + 1
+		else
+			break
+		end
+	end
+
+	return count
+end
+
+local function _count_expedition_same_targets(minigame)
 	if not minigame then
 		return 0
 	end
@@ -989,10 +1197,28 @@ _should_submit_drill_autosolve = function(minigame, t)
 	local correct_targets = minigame:correct_targets()
 	local selected_index = minigame.selected_index and minigame:selected_index() or nil
 	local correct_target = stage and correct_targets and correct_targets[stage]
-	local is_searching = minigame.is_searching and minigame:is_searching()
-	local search_ready = minigame.search_percentage and minigame:search_percentage(t or _gameplay_time()) >= 1
+	local search_time = rawget(minigame, "_search_time")
+	local networked_live = _is_networked_live_minigame(minigame)
+	local submit_time = (t or _gameplay_time()) + (networked_live and 0.12 or 0)
+	local search_ready = search_time and submit_time >= search_time + (MinigameSettings.drill_search_time or 0)
+	local tracked_stage = mod._drill_autosolve_selected_stage
+	local tracked_index = mod._drill_autosolve_selected_index
 
-	return is_searching and search_ready and selected_index ~= nil and selected_index == correct_target
+	if tracked_stage ~= stage or tracked_index ~= selected_index then
+		mod._drill_autosolve_selected_stage = stage
+		mod._drill_autosolve_selected_index = selected_index
+		mod._drill_autosolve_selected_at = submit_time
+	end
+
+	if submit_time < (mod._drill_autosolve_stage_ready_time or 0) then
+		return false
+	end
+
+	if submit_time < (mod._drill_autosolve_selected_at or 0) + (networked_live and 0.05 or 0.03) then
+		return false
+	end
+
+	return search_ready and selected_index ~= nil and selected_index == correct_target
 end
 
 local function _reset_balance_autosolve()
@@ -1003,23 +1229,37 @@ local function _balance_autosolve_strength()
 	return mod:get("balance_autosolve_strength") or 0.66
 end
 
-_balance_autosolve_axis_value = function(axis_value, distance, strength)
+_balance_autosolve_axis_value = function(axis_value, axis_velocity, distance, strength)
 	local magnitude = math.abs(axis_value)
 
-	if magnitude <= 0.025 then
+	if magnitude <= 0.035 then
 		return nil
 	end
 
-	local override_value = math.min(magnitude * strength, 1)
+	local velocity = math.abs(axis_velocity or 0)
+	local moving_outward = (axis_value > 0 and (axis_velocity or 0) > 0) or (axis_value < 0 and (axis_velocity or 0) < 0)
+	local outward_velocity = moving_outward and velocity or 0
+	local center_factor = math.clamp((distance - 0.08) / 0.55, 0, 1)
+	center_factor = center_factor * center_factor
 
-	if distance >= 0.92 then
+	if distance < 0.18 and outward_velocity < 0.7 then
+		return nil
+	end
+
+	local override_value = magnitude * strength * (0.18 + center_factor * 0.92)
+
+	if outward_velocity > 0.4 then
+		override_value = override_value + math.min(outward_velocity * 0.04, 0.2)
+	end
+
+	if distance >= 0.92 or outward_velocity >= 3.5 then
 		local axis_share = magnitude / math.max(distance, 0.001)
-		local recovery_strength = distance >= 0.985 and 1.35 or 1.15
+		local recovery_strength = distance >= 0.985 and 1.35 or outward_velocity >= 5 and 1.3 or 1.15
 
 		override_value = math.max(override_value, math.min(axis_share * recovery_strength, 1))
 	end
 
-	return override_value
+	return math.clamp(override_value, 0, 1)
 end
 
 _balance_autosolve_move_vector = function(minigame)
@@ -1037,8 +1277,8 @@ _balance_autosolve_move_vector = function(minigame)
 	local strength = _balance_autosolve_strength()
 	local x = 0
 	local y = 0
-	local input_x = _balance_autosolve_axis_value(position.x, distance, strength)
-	local input_y = _balance_autosolve_axis_value(position.y, distance, strength)
+	local input_x = _balance_autosolve_axis_value(position.x, balance_velocity_x, distance, strength)
+	local input_y = _balance_autosolve_axis_value(position.y, balance_velocity_y, distance, strength)
 
 	if input_x then
 		x = position.x > 0 and -input_x or input_x
@@ -1056,21 +1296,75 @@ _balance_autosolve_move_vector = function(minigame)
 end
 
 local function _handle_decode_autosolve_input(action_name, result)
-	if result or not _is_decode_autosolve_enabled() or not _is_primary_hold_action(action_name) or decode_autosolve_cooldown > 0 then
+	if not _is_decode_autosolve_enabled() or not _is_primary_hold_action(action_name) then
 		return result
 	end
 
+	local gameplay_time = _gameplay_time()
 	local minigame = _active_decode_autosolve_minigame and _active_decode_autosolve_minigame() or nil
 
-	if not minigame or not _is_decode_on_target(minigame, _gameplay_time()) then
+	if not minigame then
+		decode_autosolve_press_deadline = 0
+
+		return result
+	end
+
+	if decode_autosolve_press_deadline > gameplay_time then
+		return true
+	end
+
+	if result or decode_autosolve_cooldown > 0 then
+		return result
+	end
+
+	if not _is_decode_on_target(minigame, gameplay_time) then
 		return result
 	end
 
 	local current_stage = minigame._current_stage
 	local targets = minigame._decode_targets or {}
 	local same_next_target = current_stage and targets[current_stage] ~= nil and targets[current_stage] == targets[current_stage + 1]
+	local press_window = _decode_autosolve_press_window_seconds(minigame)
 
-	decode_autosolve_cooldown = same_next_target and 0.05 or _decode_autosolve_cooldown_seconds()
+	decode_autosolve_press_deadline = gameplay_time + press_window
+	decode_autosolve_cooldown = press_window + (same_next_target and 0.05 or _decode_autosolve_cooldown_seconds())
+
+	return true
+end
+
+local function _handle_expedition_autosolve_input(action_name, result)
+	if not _is_expedition_autosolve_enabled() or not _is_primary_hold_action(action_name) then
+		return result
+	end
+
+	local gameplay_time = _gameplay_time()
+	local minigame = _active_expedition_autosolve_minigame and _active_expedition_autosolve_minigame() or nil
+
+	if not minigame then
+		expedition_autosolve_press_deadline = 0
+
+		return result
+	end
+
+	if expedition_autosolve_press_deadline > gameplay_time then
+		return true
+	end
+
+	if result or expedition_autosolve_cooldown > 0 then
+		return result
+	end
+
+	if not _is_expedition_on_target(minigame, gameplay_time) then
+		return result
+	end
+
+	local current_stage = minigame._current_stage
+	local targets = minigame._decode_targets or {}
+	local same_next_target = current_stage and targets[current_stage] ~= nil and targets[current_stage] == targets[current_stage + 1]
+	local press_window = _expedition_autosolve_press_window_seconds(minigame)
+
+	expedition_autosolve_press_deadline = gameplay_time + press_window
+	expedition_autosolve_cooldown = press_window + (same_next_target and 0.05 or _expedition_autosolve_cooldown_seconds())
 
 	return true
 end
@@ -1107,6 +1401,10 @@ local function _handle_frequency_autosolve_input(action_name, result)
 	end
 
 	if action_name == "move" then
+		if type(result) == "userdata" and (result.x ~= 0 or result.y ~= 0 or result.z ~= 0) then
+			return result
+		end
+
 		return _frequency_autosolve_move_vector(minigame) or result
 	end
 
@@ -1131,6 +1429,44 @@ _handle_drill_autosolve_input = function(action_name, result)
 	local minigame = _active_drill_autosolve_minigame and _active_drill_autosolve_minigame() or nil
 
 	if not minigame then
+		mod._sync_drill_autosolve_minigame(nil)
+		return result
+	end
+
+	mod._sync_drill_autosolve_minigame(minigame)
+	mod._sync_drill_autosolve_stage(minigame)
+
+	if _is_primary_hold_action(action_name) then
+		local gameplay_time = _gameplay_time()
+
+		if (mod._drill_autosolve_press_deadline or 0) > gameplay_time then
+			return true
+		end
+
+		if (mod._drill_autosolve_release_deadline or 0) > gameplay_time then
+			return false
+		end
+
+		if (mod._drill_autosolve_second_press_deadline or 0) > gameplay_time then
+			return true
+		end
+
+		if mod._drill_autosolve_force_release then
+			mod._drill_autosolve_force_release = false
+
+			return false
+		end
+
+		if not result and (mod._drill_autosolve_submit_cooldown or 0) <= 0 and _should_submit_drill_autosolve(minigame, gameplay_time) then
+			mod._drill_autosolve_submit_cooldown = _drill_autosolve_step_delay()
+			mod._drill_autosolve_press_deadline = gameplay_time + 0.08
+			mod._drill_autosolve_release_deadline = gameplay_time + 0.12
+			mod._drill_autosolve_second_press_deadline = gameplay_time + 0.2
+			mod._drill_autosolve_force_release = true
+
+			return true
+		end
+
 		return result
 	end
 
@@ -1141,19 +1477,31 @@ _handle_drill_autosolve_input = function(action_name, result)
 			return result
 		end
 
-		local magnitude = math.sqrt((auto_move.x or 0) * (auto_move.x or 0) + (auto_move.y or 0) * (auto_move.y or 0))
-
-		if magnitude <= 0.01 then
-			return auto_move
-		end
-
-		if (mod._drill_autosolve_move_cooldown or 0) > 0 then
-			return Vector3.zero()
-		end
-
-		mod._drill_autosolve_move_cooldown = _drill_autosolve_step_delay()
-
 		return auto_move
+	end
+
+	local auto_move = _drill_autosolve_move_vector(minigame)
+
+	if not auto_move then
+		return result
+	end
+
+	local override_value = nil
+
+	if action_name == "move_left" and (auto_move.x or 0) < -0.15 then
+		override_value = math.abs(auto_move.x or 0)
+	elseif action_name == "move_right" and (auto_move.x or 0) > 0.15 then
+		override_value = math.abs(auto_move.x or 0)
+	elseif action_name == "move_forward" and (auto_move.y or 0) > 0.15 then
+		override_value = math.abs(auto_move.y or 0)
+	elseif action_name == "move_backward" and (auto_move.y or 0) < -0.15 then
+		override_value = math.abs(auto_move.y or 0)
+	end
+
+	if override_value then
+		local current_value = type(result) == "number" and result or (result and 1 or 0)
+
+		return math.max(current_value, override_value)
 	end
 
 	return result
@@ -1169,13 +1517,13 @@ local function _handle_balance_autosolve_input(action_name, result)
 	local edge_recovery = balance_distance >= 0.92
 
 	if balance_cursor_x > 0 and action_name == "move_left" and (edge_recovery or balance_velocity_x > -0.5) then
-		override_value = _balance_autosolve_axis_value(balance_cursor_x, balance_distance, strength)
+		override_value = _balance_autosolve_axis_value(balance_cursor_x, balance_velocity_x, balance_distance, strength)
 	elseif balance_cursor_x < 0 and action_name == "move_right" and (edge_recovery or balance_velocity_x < 0.5) then
-		override_value = _balance_autosolve_axis_value(balance_cursor_x, balance_distance, strength)
+		override_value = _balance_autosolve_axis_value(balance_cursor_x, balance_velocity_x, balance_distance, strength)
 	elseif balance_cursor_y > 0 and action_name == "move_forward" and (edge_recovery or balance_velocity_y > -0.5) then
-		override_value = _balance_autosolve_axis_value(balance_cursor_y, balance_distance, strength)
+		override_value = _balance_autosolve_axis_value(balance_cursor_y, balance_velocity_y, balance_distance, strength)
 	elseif balance_cursor_y < 0 and action_name == "move_backward" and (edge_recovery or balance_velocity_y < 0.5) then
-		override_value = _balance_autosolve_axis_value(balance_cursor_y, balance_distance, strength)
+		override_value = _balance_autosolve_axis_value(balance_cursor_y, balance_velocity_y, balance_distance, strength)
 	end
 
 	if override_value then
@@ -1187,7 +1535,7 @@ local function _handle_balance_autosolve_input(action_name, result)
 	return result
 end
 
-local function _refresh_scannable_units()
+_refresh_scannable_units = function()
 	scannable_units = _world_scan_collect_scannable_units(_world_scan_always_show())
 	mod._world_scan_scannable_units = scannable_units
 end
@@ -1195,10 +1543,17 @@ end
 local function _apply_world_scan_outline_settings()
 	local prop_outline_settings = OutlineSettings and OutlineSettings.PropOutlineExtension
 	local outline_color = _world_scan_outline_color()
+	local signature = string.format("%d:%d:%d:%s", outline_color[1] or 0, outline_color[2] or 0, outline_color[3] or 0, _world_scan_show_through_walls() and "1" or "0")
 
 	if not prop_outline_settings then
 		return
 	end
+
+	if mod._world_scan_outline_settings_signature == signature then
+		return
+	end
+
+	mod._world_scan_outline_settings_signature = signature
 
 	if prop_outline_settings.scanning then
 		prop_outline_settings.scanning.color = outline_color
@@ -1225,9 +1580,18 @@ _apply_world_scan_outline_color_to_unit = function(scannable_unit)
 
 	local color = _world_scan_outline_color()
 	local color_vector = Vector3(color[1], color[2], color[3])
+	local signature = string.format("%d:%d:%d", color[1] or 0, color[2] or 0, color[3] or 0)
+	local applied_signatures = mod._world_scan_unit_color_signatures or {}
+
+	mod._world_scan_unit_color_signatures = applied_signatures
+
+	if applied_signatures[scannable_unit] == signature then
+		return
+	end
 
 	pcall(Unit.set_vector3_for_material, scannable_unit, "scanning", "outline_color", color_vector)
 	pcall(Unit.set_vector3_for_material, scannable_unit, "scanning_reversed_depth", "outline_color", color_vector)
+	applied_signatures[scannable_unit] = signature
 end
 
 _set_world_scan_markers = function(active)
@@ -1260,28 +1624,53 @@ _set_world_scan_markers = function(active)
 	_refresh_world_scan_icons_view()
 end
 
-local function _set_world_scan_highlights(active)
+_set_world_scan_highlights = function(active, refresh_units)
 	local enabled = active and _should_highlight_world_scans() and _world_scan_uses_highlight() or false
+	local highlighted_units = mod._world_scan_highlighted_units or {}
+	local next_highlighted_units = {}
 
 	_apply_world_scan_outline_settings()
-	_refresh_scannable_units()
+
+	if refresh_units ~= false then
+		_refresh_scannable_units()
+	end
 
 	for scannable_unit, _ in pairs(scannable_units) do
 		if Unit.alive(scannable_unit) then
 			local scannable_extension = ScriptUnit.has_extension(scannable_unit, "mission_objective_zone_scannable_system")
 
 			if scannable_extension and (scannable_extension:is_active() or _world_scan_always_show()) then
-				local visible = enabled and _world_scan_unit_is_visible(scannable_unit, scannable_extension) or false
+				local visible = false
+
+				if enabled then
+					visible = _world_scan_show_through_walls() or _world_scan_unit_is_visible(scannable_unit, scannable_extension)
+				end
 
 				scannable_extension:set_scanning_outline(visible)
 				scannable_extension:set_scanning_highlight(visible)
 
 				if visible then
+					next_highlighted_units[scannable_unit] = true
 					_apply_world_scan_outline_color_to_unit(scannable_unit)
+				elseif mod._world_scan_unit_color_signatures then
+					mod._world_scan_unit_color_signatures[scannable_unit] = nil
 				end
 			end
 		end
 	end
+
+	for highlighted_unit, _ in pairs(highlighted_units) do
+		if not next_highlighted_units[highlighted_unit] and Unit.alive(highlighted_unit) then
+			local highlighted_extension = ScriptUnit.has_extension(highlighted_unit, "mission_objective_zone_scannable_system")
+
+			if highlighted_extension then
+				highlighted_extension:set_scanning_outline(false)
+				highlighted_extension:set_scanning_highlight(false)
+			end
+		end
+	end
+
+	mod._world_scan_highlighted_units = next_highlighted_units
 
 	_set_world_scan_markers(active)
 end
@@ -2567,8 +2956,12 @@ function PreviewMinigameExtension:new(minigame_type)
 		return nil
 	end
 
+	local minigame = factory()
+
+	_tag_minigame_type(minigame, minigame_type)
+
 	return setmetatable({
-		_minigame = factory(),
+		_minigame = minigame,
 		_minigame_type = minigame_type,
 	}, PreviewMinigameExtension)
 end
@@ -2581,16 +2974,40 @@ function PreviewMinigameExtension:minigame()
 	return self._minigame
 end
 
+local function _try_minigame_extension_minigame(minigame_extension, minigame_type)
+	if not minigame_extension or not minigame_extension.minigame then
+		return nil
+	end
+
+	local ok, minigame = nil, nil
+
+	if minigame_type ~= nil then
+		ok, minigame = pcall(minigame_extension.minigame, minigame_extension, minigame_type)
+	else
+		ok, minigame = pcall(minigame_extension.minigame, minigame_extension)
+	end
+
+	return ok and minigame or nil
+end
+
 local function _local_player()
+	local cached_player = mod._cached_local_player
+
+	if cached_player ~= nil then
+		return cached_player or nil
+	end
+
 	local player_manager = Managers.player
 
 	if not player_manager then
+		mod._cached_local_player = false
 		return nil
 	end
 
 	local connection_manager = Managers.connection
 
 	if connection_manager and connection_manager.is_initialized and not connection_manager:is_initialized() then
+		mod._cached_local_player = false
 		return nil
 	end
 
@@ -2598,49 +3015,83 @@ local function _local_player()
 		local ok, player = pcall(player_manager.local_player_safe, player_manager, 1)
 
 		if ok and player then
+			mod._cached_local_player = player
 			return player
 		end
 	end
 
 	if not connection_manager or not connection_manager.is_initialized or not connection_manager:is_initialized() then
+		mod._cached_local_player = false
 		return nil
 	end
 
 	if (player_manager._num_players or 0) <= 0 or (player_manager._num_human_players or 0) <= 0 then
+		mod._cached_local_player = false
 		return nil
 	end
 
 	if not player_manager.local_player then
+		mod._cached_local_player = false
 		return nil
 	end
 
 	local ok, player = pcall(player_manager.local_player, player_manager, 1)
 
+	mod._cached_local_player = ok and player or false
+
 	return ok and player or nil
 end
 
 local function _local_player_unit()
+	local cached_player_unit = mod._cached_local_player_unit
+
+	if cached_player_unit ~= nil then
+		return cached_player_unit or nil
+	end
+
 	local player = _local_player()
 	local player_unit = player and player.player_unit or nil
 
-	return player_unit and Unit.alive(player_unit) and player_unit or nil
+	mod._cached_local_player_unit = player_unit and Unit.alive(player_unit) and player_unit or false
+
+	return mod._cached_local_player_unit or nil
 end
 
-local function _active_live_minigame()
+_active_live_minigame = function()
+	local cached_live_minigame = mod._cached_live_minigame
+
+	if cached_live_minigame ~= nil then
+		return cached_live_minigame or nil
+	end
+
 	local player_unit = _local_player_unit()
 	local character_state_machine_extension = player_unit and ScriptUnit.has_extension(player_unit, "character_state_machine_system")
 
 	if not character_state_machine_extension or character_state_machine_extension:current_state_name() ~= "minigame" then
+		mod._cached_live_minigame = false
+		mod._cached_live_minigame_type = nil
 		return nil
 	end
 
 	local current_state = character_state_machine_extension:current_state()
 
 	if current_state and current_state.minigame then
-		return current_state:minigame()
+		mod._cached_live_minigame = current_state:minigame() or false
+		_tag_minigame_type(mod._cached_live_minigame or nil, mod._cached_live_minigame_type)
+
+		return mod._cached_live_minigame or nil
 	end
 
-	return current_state and current_state._minigame or nil
+	mod._cached_live_minigame = current_state and current_state._minigame or false
+	_tag_minigame_type(mod._cached_live_minigame or nil, mod._cached_live_minigame_type)
+
+	return mod._cached_live_minigame or nil
+end
+
+local function _active_live_minigame_type()
+	local live_minigame = _active_live_minigame()
+
+	return _minigame_type_hint(live_minigame) or mod._cached_live_minigame_type
 end
 
 local function _active_practice_minigame()
@@ -2651,8 +3102,60 @@ local function _active_practice_minigame()
 	return nil
 end
 
-local function _looks_like_decode_minigame(minigame)
+local function _active_practice_minigame_type()
+	local practice_minigame = _active_practice_minigame()
+
+	return _minigame_type_hint(practice_minigame) or (practice_session and practice_session.minigame_type) or nil
+end
+
+local function _looks_like_decode_style_minigame(minigame)
 	return minigame and minigame.current_decode_target and minigame.sweep_duration and minigame.is_on_target
+end
+
+local function _looks_like_decode_minigame(minigame)
+	local minigame_type = _minigame_type_hint(minigame)
+
+	return (minigame_type == nil or not _is_expedition_minigame_type(minigame_type)) and _looks_like_decode_style_minigame(minigame)
+end
+
+local function _looks_like_expedition_minigame(minigame)
+	return _is_expedition_minigame_type(_minigame_type_hint(minigame)) and _looks_like_decode_style_minigame(minigame)
+end
+
+local function _resolve_decode_style_minigame(minigame_extension)
+	if not minigame_extension then
+		return nil
+	end
+
+	local minigame_type = minigame_extension.minigame_type and minigame_extension:minigame_type() or nil
+	local candidate_types = _is_expedition_minigame_type(minigame_type) and {
+		EXPEDITION_MINIGAME_TYPE,
+		false,
+		MinigameSettings.types.decode_symbols,
+	} or {
+		MinigameSettings.types.decode_symbols,
+		false,
+		EXPEDITION_MINIGAME_TYPE,
+	}
+
+	for index = 1, #candidate_types do
+		local candidate_type = candidate_types[index]
+		local minigame = _tag_minigame_type(_try_minigame_extension_minigame(minigame_extension, candidate_type or nil), candidate_type or minigame_type)
+
+		if _looks_like_decode_style_minigame(minigame) then
+			return minigame
+		end
+	end
+
+	return nil
+end
+
+local function _decode_style_future_rows(minigame)
+	if _looks_like_expedition_minigame(minigame) then
+		return 0
+	end
+
+	return _should_highlight_decode_targets() and (mod:get("decode_future_rows") or 0) or 0
 end
 
 local function _looks_like_frequency_minigame(minigame)
@@ -2665,14 +3168,32 @@ end
 
 _active_decode_autosolve_minigame = function()
 	local practice_minigame = _active_practice_minigame()
+	local practice_minigame_type = _active_practice_minigame_type()
 
-	if _looks_like_decode_minigame(practice_minigame) then
+	if (practice_minigame_type == MinigameSettings.types.decode_symbols or practice_minigame_type == PREVIEW_DECODE_SYMBOLS_12_TYPE) and _looks_like_decode_minigame(practice_minigame) then
+		return practice_minigame
+	end
+
+	local live_minigame = _active_live_minigame()
+	local live_minigame_type = _active_live_minigame_type()
+
+	if (live_minigame_type == nil or live_minigame_type == MinigameSettings.types.decode_symbols) and _looks_like_decode_minigame(live_minigame) then
+		return live_minigame
+	end
+
+	return nil
+end
+
+_active_expedition_autosolve_minigame = function()
+	local practice_minigame = _active_practice_minigame()
+
+	if _is_expedition_minigame_type(_active_practice_minigame_type()) and _looks_like_expedition_minigame(practice_minigame) then
 		return practice_minigame
 	end
 
 	local live_minigame = _active_live_minigame()
 
-	if _looks_like_decode_minigame(live_minigame) then
+	if _is_expedition_minigame_type(_active_live_minigame_type()) and _looks_like_expedition_minigame(live_minigame) then
 		return live_minigame
 	end
 
@@ -2978,6 +3499,7 @@ end
 local function _apply_mod_override_state()
 	if not _is_mod_active() then
 		_reset_decode_autosolve()
+		_reset_expedition_autosolve()
 		_reset_drill_autosolve()
 		_reset_frequency_autosolve()
 		_reset_balance_autosolve()
@@ -3035,14 +3557,14 @@ local function _practice_scanner_item()
 	return nil, nil
 end
 
-local function _practice_auspex_unit(player_unit)
+_practice_auspex_unit = function(player_unit)
 	local visual_loadout_extension = player_unit and ScriptUnit.has_extension(player_unit, "visual_loadout_system")
 	local item_unit_1p = visual_loadout_extension and visual_loadout_extension:unit_and_attachments_from_slot(PRACTICE_DEVICE_SLOT)
 
 	return item_unit_1p
 end
 
-local function _is_practice_auspex_ready(auspex_unit)
+_is_practice_auspex_ready = function(auspex_unit)
 	if not auspex_unit or not Unit.alive(auspex_unit) then
 		return false
 	end
@@ -3056,7 +3578,7 @@ local function _is_practice_auspex_ready(auspex_unit)
 	return ok and plane_mesh ~= nil
 end
 
-local function _practice_interface_unit(player_unit)
+_practice_interface_unit = function(player_unit)
 	local unit_data_extension = player_unit and ScriptUnit.has_extension(player_unit, "unit_data_system")
 	local minigame_character_state = unit_data_extension and unit_data_extension:read_component("minigame_character_state")
 
@@ -3077,11 +3599,11 @@ local function _practice_interface_unit(player_unit)
 	return unit_spawner and unit_spawner:unit(unit_id, is_level_unit) or nil
 end
 
-local function _is_practice_interface_ready(interface_unit)
+_is_practice_interface_ready = function(interface_unit)
 	return interface_unit ~= nil and Unit.alive(interface_unit) and ScriptUnit.has_extension(interface_unit, "minigame_system") ~= nil
 end
 
-local function _set_practice_item_focus_active(session, active)
+_set_practice_item_focus_active = function(session, active)
 	if not session or not session.player_unit then
 		return false
 	end
@@ -3123,7 +3645,7 @@ local function _set_practice_item_focus_active(session, active)
 	return true
 end
 
-local function _open_preview_session_view(session)
+_open_preview_session_view = function(session)
 	local ui_manager = Managers.ui
 
 	if not ui_manager or not session or not session.view_name or not session.context then
@@ -3147,7 +3669,7 @@ local function _open_preview_session_view(session)
 	return true
 end
 
-local function _overlay_preview_view_is_active(session)
+_overlay_preview_view_is_active = function(session)
 	local ui_manager = Managers.ui
 
 	if not ui_manager or not session or session.item_mode or session.pending_item_mode or not session.view_name then
@@ -3157,14 +3679,14 @@ local function _overlay_preview_view_is_active(session)
 	return ui_manager:view_active(session.view_name) and not ui_manager:is_view_closing(session.view_name)
 end
 
-local function _close_world_scan_views()
+_close_world_scan_views = function()
 	_suppress_world_scan_views(0.35)
 	_close_view(WORLD_SCAN_VIEW_NAME, true)
 	_close_view(WORLD_SCAN_ICONS_VIEW_NAME, true)
 	_refresh_scanner_overlay_state()
 end
 
-local function _start_preview_minigame(session, player)
+_start_preview_minigame = function(session, player)
 	local minigame = session and session.minigame
 
 	if not minigame or session.minigame_started then
@@ -3184,7 +3706,7 @@ local function _start_preview_minigame(session, player)
 	return true
 end
 
-local function _open_overlay_preview_session(session, show_item_warning)
+_open_overlay_preview_session = function(session, show_item_warning)
 	if not session or not session.context then
 		return false
 	end
@@ -3212,7 +3734,7 @@ local function _open_overlay_preview_session(session, show_item_warning)
 	return opened
 end
 
-local function _try_open_pending_item_preview(session)
+_try_open_pending_item_preview = function(session)
 	if not session or not session.pending_item_mode or not session.player_unit or not session.context then
 		return false
 	end
@@ -3238,7 +3760,7 @@ local function _try_open_pending_item_preview(session)
 	return _set_practice_item_focus_active(session, true)
 end
 
-local function _equip_practice_scanner()
+_equip_practice_scanner = function()
 	local player_unit = _local_player_unit()
 	local unit_data_extension = player_unit and ScriptUnit.has_extension(player_unit, "unit_data_system")
 	local visual_loadout_extension = player_unit and ScriptUnit.has_extension(player_unit, "visual_loadout_system")
@@ -3279,7 +3801,7 @@ local function _equip_practice_scanner()
 	}
 end
 
-local function _try_equip_practice_scanner()
+_try_equip_practice_scanner = function()
 	local ok, result_or_error = xpcall(_equip_practice_scanner, debug.traceback)
 
 	if ok then
@@ -3289,7 +3811,7 @@ local function _try_equip_practice_scanner()
 	return nil, result_or_error
 end
 
-local function _restore_practice_scanner(session)
+_restore_practice_scanner = function(session)
 	if not session or not session.player_unit then
 		return
 	end
@@ -3679,6 +4201,10 @@ mod:hook_require("scripts/managers/ui/ui_manager", function(UIManager)
 			end
 		end
 
+		if #filtered_views == #views then
+			return func(self)
+		end
+
 		local input_service = self:input_service()
 		local hotkey_settings = self._update_hotkeys
 		local hotkeys = hotkey_settings.hotkeys
@@ -3857,6 +4383,11 @@ mod:hook_require("scripts/extension_systems/scanner_display/scanner_display_exte
 		local use_overlay = _minigame_display_mode() == "overlay"
 		local minigame_extension = interface_unit and ScriptUnit.has_extension(interface_unit, "minigame_system") or nil
 		local minigame_type = minigame_extension and minigame_extension:minigame_type() or nil
+		local live_minigame = _tag_minigame_type(_try_minigame_extension_minigame(minigame_extension), minigame_type)
+
+		if live_minigame then
+			mod._cached_live_minigame_type = minigame_type
+		end
 
 		if not use_overlay and interface_unit and minigame_extension and minigame_type and _is_minigame_enabled(minigame_type) and not _live_item_mode_supported_here() then
 			use_overlay = true
@@ -3905,6 +4436,8 @@ mod:hook_require("scripts/extension_systems/scanner_display/scanner_display_exte
 	end)
 
 	mod:hook_safe(ScannerDisplayExtension, "deactivate", function()
+		mod._cached_live_minigame_type = nil
+
 		local ui_manager = Managers.ui
 
 		if ui_manager and ui_manager:view_active(OVERLAY_VIEW_NAME) then
@@ -3956,21 +4489,35 @@ end)
 mod:hook_safe(CLASS.AuspexScanningEffects, "wield", function()
 	scanner_world_helper_active = true
 
-	_set_world_scan_highlights(true)
+	_request_world_scan_refresh(true)
 end)
 
 mod:hook_safe(CLASS.AuspexScanningEffects, "unwield", function()
 	scanner_world_helper_active = false
 	_set_scanner_searching_state(false)
 
-	_set_world_scan_highlights(_world_scan_effective_active())
+	_request_world_scan_refresh(true)
 end)
 
 mod:hook_safe(CLASS.AuspexScanningEffects, "destroy", function()
 	scanner_world_helper_active = false
 	_set_scanner_searching_state(false)
 
-	_set_world_scan_highlights(_world_scan_effective_active())
+	_request_world_scan_refresh(true)
+end)
+
+mod:hook_require("scripts/extension_systems/mission_objective_zone/mission_objective_zone_system", function(MissionObjectiveZoneSystem)
+	mod:hook_safe(MissionObjectiveZoneSystem, "activate_zone", function(self, unit)
+		_request_world_scan_refresh(true)
+	end)
+
+	mod:hook_safe(MissionObjectiveZoneSystem, "rpc_event_mission_objective_zone_activate_zone", function(self, channel_id, level_unit_id)
+		_request_world_scan_refresh(true)
+	end)
+
+	mod:hook_safe(MissionObjectiveZoneSystem, "register_scannable_unit", function(self, scannable_unit)
+		_request_world_scan_refresh(false)
+	end)
 end)
 
 mod:hook_require("scripts/extension_systems/mission_objective_zone_scannable/mission_objective_zone_scannable_extension", function(MissionObjectiveZoneScannableExtension)
@@ -3982,15 +4529,21 @@ mod:hook_require("scripts/extension_systems/mission_objective_zone_scannable/mis
 		end
 
 		if active then
-			if _world_scan_effective_active() then
-				_set_world_scan_highlights(true)
-			end
+			_request_world_scan_refresh(true)
 
 			return
 		end
 
 		self:set_scanning_outline(false)
 		self:set_scanning_highlight(false)
+
+		if mod._world_scan_unit_color_signatures then
+			mod._world_scan_unit_color_signatures[unit] = nil
+		end
+
+		if mod._world_scan_highlighted_units then
+			mod._world_scan_highlighted_units[unit] = nil
+		end
 
 		if mod._world_scan_icon_units then
 			mod._world_scan_icon_units[unit] = nil
@@ -4033,6 +4586,7 @@ mod:hook_safe(CLASS.AuspexEffects, "wield", function(self)
 	end
 
 	_set_scanner_equipped_state(true)
+	_request_world_scan_refresh(true)
 end)
 
 mod:hook_safe(CLASS.AuspexEffects, "unwield", function(self)
@@ -4041,12 +4595,19 @@ mod:hook_safe(CLASS.AuspexEffects, "unwield", function(self)
 	end
 
 	_set_scanner_equipped_state(false)
+	_set_scanner_searching_state(false)
+	_request_world_scan_refresh(true)
 end)
 
 mod:hook_require("scripts/ui/views/scanner_display_view/minigame_decode_symbols_view", function(MinigameDecodeSymbolsView)
 	function MinigameDecodeSymbolsView:_create_symbol_widgets()
 		local minigame_extension = self._minigame_extension
-		local minigame = minigame_extension:minigame(MinigameSettings.types.decode_symbols)
+		local minigame = _resolve_decode_style_minigame(minigame_extension)
+
+		if not minigame then
+			return
+		end
+
 		local symbols = minigame:symbols()
 
 		if #symbols <= 0 then
@@ -4107,7 +4668,12 @@ mod:hook_require("scripts/ui/views/scanner_display_view/minigame_decode_symbols_
 
 	function MinigameDecodeSymbolsView:_draw_cursor(widgets_by_name, decode_start_time, on_target, gameplay_time)
 		local minigame_extension = self._minigame_extension
-		local minigame = minigame_extension:minigame(MinigameSettings.types.decode_symbols)
+		local minigame = _resolve_decode_style_minigame(minigame_extension)
+
+		if not minigame then
+			return
+		end
+
 		local current_decode_stage = minigame:current_stage()
 		local symbols_per_stage = MinigameSettings.decode_symbols_items_per_stage
 		local cursor_position = self:_get_cursor_position_from_time(decode_start_time, gameplay_time)
@@ -4120,27 +4686,19 @@ mod:hook_require("scripts/ui/views/scanner_display_view/minigame_decode_symbols_
 
 		widget_target.style.frame.offset[1] = starting_offset_x + (widget_size[1] + spacing) * ((symbols_per_stage - 1) * cursor_position)
 		widget_target.style.frame.offset[2] = starting_offset_y + (widget_size[2] + spacing) * (current_decode_stage - 1)
+		widget_target.style.frame.offset[3] = 1
 
-		if on_target then
-			widget_target.style.frame.color = {
-				255,
-				255,
-				165,
-				0,
-			}
-		else
-			widget_target.style.frame.color = {
-				255,
-				255,
-				165,
-				0,
-			}
-		end
+		widget_target.style.frame.color = _ui_highlight_color()
 	end
 
 	function MinigameDecodeSymbolsView:_draw_targets(widgets_by_name, decode_start_time, on_target)
 		local minigame_extension = self._minigame_extension
-		local minigame = minigame_extension:minigame(MinigameSettings.types.decode_symbols)
+		local minigame = _resolve_decode_style_minigame(minigame_extension)
+
+		if not minigame then
+			return
+		end
+
 		local decode_target = minigame:current_decode_target()
 		local current_decode_stage = minigame:current_stage()
 		local widget_target = widgets_by_name.symbol_highlight
@@ -4152,32 +4710,11 @@ mod:hook_require("scripts/ui/views/scanner_display_view/minigame_decode_symbols_
 
 		widget_target.style.highlight.offset[1] = starting_offset_x + (widget_size[1] + spacing) * (decode_target - 1)
 		widget_target.style.highlight.offset[2] = starting_offset_y + (widget_size[2] + spacing) * (current_decode_stage - 1)
-
-		if on_target then
-			widget_target.style.highlight.color = {
-				72,
-				255,
-				255,
-				255,
-			}
-		else
-			widget_target.style.highlight.color = {
-				60,
-				255,
-				165,
-				0,
-			}
-		end
+		widget_target.style.highlight.color = _ui_highlight_color()
 	end
 end)
 
 mod:hook_safe(CLASS.MinigameDecodeSymbolsView, "_draw_targets", function(self, widgets_by_name)
-	if not _should_highlight_decode_targets() then
-		self._auspex_helper_decode_visible_count = 0
-
-		return
-	end
-
 	local highlight_widget = widgets_by_name and widgets_by_name.symbol_highlight
 
 	if highlight_widget and highlight_widget.style and highlight_widget.style.highlight then
@@ -4185,19 +4722,19 @@ mod:hook_safe(CLASS.MinigameDecodeSymbolsView, "_draw_targets", function(self, w
 	end
 
 	local minigame_extension = self._minigame_extension
-	local minigame = minigame_extension and minigame_extension:minigame(MinigameSettings.types.decode_symbols)
+	local minigame = _resolve_decode_style_minigame(minigame_extension)
 	local decode_targets = minigame and minigame._decode_targets or nil
 	local current_stage = minigame and minigame:current_stage() or nil
-	local reveal_future_rows = mod:get("decode_future_rows") or 0
+	local reveal_future_rows = _decode_style_future_rows(minigame)
 
-	if not current_stage or not decode_targets or reveal_future_rows <= 0 then
+	if not current_stage or not decode_targets then
 		self._auspex_helper_decode_visible_count = 0
 
 		return
 	end
 
 	local last_stage = math.min(#decode_targets, current_stage + reveal_future_rows)
-	local visible_count = last_stage - current_stage
+	local visible_count = last_stage - current_stage + 1
 	local layout = _decode_layout(minigame)
 	local widget_size = layout.widget_size
 	local starting_offset_x = layout.starting_offset_x
@@ -4211,8 +4748,8 @@ mod:hook_safe(CLASS.MinigameDecodeSymbolsView, "_draw_targets", function(self, w
 		return
 	end
 
-	for stage = current_stage + 1, last_stage do
-		local widget_index = stage - current_stage
+	for stage = current_stage, last_stage do
+		local widget_index = stage - current_stage + 1
 		local widget = widgets[widget_index]
 		local target = decode_targets[stage] or 1
 
@@ -4226,10 +4763,6 @@ mod:hook_safe(CLASS.MinigameDecodeSymbolsView, "_draw_targets", function(self, w
 end)
 
 mod:hook_safe(CLASS.MinigameDecodeSymbolsView, "draw_widgets", function(self, dt, t, input_service, ui_renderer)
-	if not _should_highlight_decode_targets() then
-		return
-	end
-
 	local widgets = self._auspex_helper_decode_widgets
 	local visible_count = self._auspex_helper_decode_visible_count or 0
 
@@ -4328,6 +4861,20 @@ mod:hook_safe("MinigameDecodeSymbols", "stop", function()
 	_reset_decode_autosolve()
 end)
 
+local expedition_minigame_class_name = rawget(_G, "MinigameExpedition") and "MinigameExpedition" or rawget(_G, "MinigameScan") and "MinigameScan" or nil
+local expedition_minigame_class = expedition_minigame_class_name and rawget(_G, expedition_minigame_class_name) or nil
+
+if expedition_minigame_class_name then
+	mod:hook_safe(expedition_minigame_class_name, "start", function(self)
+		_tag_minigame_type(self, EXPEDITION_MINIGAME_TYPE)
+		_reset_expedition_autosolve()
+	end)
+
+	mod:hook_safe(expedition_minigame_class_name, "stop", function()
+		_reset_expedition_autosolve()
+	end)
+end
+
 mod:hook_safe("MinigameDrill", "start", function()
 	_reset_drill_autosolve()
 end)
@@ -4345,6 +4892,20 @@ mod:hook_safe("MinigameDecodeSymbols", "is_on_target", function(self, time)
 		decode_same_targets_count = _count_decode_same_targets(self)
 	end
 end)
+
+if expedition_minigame_class_name and expedition_minigame_class and expedition_minigame_class.is_on_target then
+	mod:hook_safe(expedition_minigame_class_name, "is_on_target", function(self, time)
+		if not _is_expedition_autosolve_enabled() or expedition_autosolve_cooldown > 0 or expedition_same_targets_count > 0 then
+			return
+		end
+
+		_tag_minigame_type(self, EXPEDITION_MINIGAME_TYPE)
+
+		if _is_expedition_on_target(self, time) then
+			expedition_same_targets_count = _count_expedition_same_targets(self)
+		end
+	end)
+end
 
 local PREVIEW_BLOCKED_BOOLEAN_ACTIONS = {
 	action_one_hold = true,
@@ -4415,13 +4976,13 @@ local PREVIEW_ALLOWED_MENU_ACTIONS = {
 	ui_back = true,
 }
 
-local function _should_block_overlay_practice_input()
+_should_block_overlay_practice_input = function()
 	local session = practice_session
 
 	return session ~= nil and not session.item_mode and not session.pending_item_mode and not preview_close_requested_at
 end
 
-local function _blocked_preview_input_value(action_name, result)
+_blocked_preview_input_value = function(action_name, result)
 	if PREVIEW_ALLOWED_MENU_ACTIONS[action_name] then
 		return result
 	end
@@ -4439,7 +5000,7 @@ local function _blocked_preview_input_value(action_name, result)
 	return result
 end
 
-local function _stop_preview_input_simulation_on_service(input_service)
+_stop_preview_input_simulation_on_service = function(input_service)
 	if not input_service or input_service:is_null_service() then
 		return
 	end
@@ -4510,7 +5071,7 @@ _set_preview_input_simulation = function(enabled)
 	preview_input_simulation_service = input_service
 end
 
-local function _raw_input_action_value(input_service, action_name)
+_raw_input_action_value = function(input_service, action_name)
 	local actions = input_service and input_service._actions
 	local action_rule = actions and actions[action_name]
 
@@ -4534,7 +5095,7 @@ local function _raw_input_action_value(input_service, action_name)
 	return out
 end
 
-local function _read_preview_move_input(input_service)
+_read_preview_move_input = function(input_service)
 	local controller_move = _raw_input_action_value(input_service, "move_controller") or Vector3.zero()
 	local keyboard_move = Vector3(
 		(_raw_input_action_value(input_service, "keyboard_move_right") or 0) - (_raw_input_action_value(input_service, "keyboard_move_left") or 0),
@@ -4549,11 +5110,11 @@ local function _read_preview_move_input(input_service)
 	return keyboard_move
 end
 
-local function _preview_primary_action_pressed(input_service)
+_preview_primary_action_pressed = function(input_service)
 	return not not (_raw_input_action_value(input_service, "action_one_pressed") or _raw_input_action_value(input_service, "interact_pressed") or _raw_input_action_value(input_service, "interact_primary_pressed") or _raw_input_action_value(input_service, "jump_pressed"))
 end
 
-local function _trigger_preview_primary_action(minigame, t)
+_trigger_preview_primary_action = function(minigame, t)
 	if not minigame or not minigame.action then
 		return
 	end
@@ -4566,7 +5127,7 @@ local function _trigger_preview_primary_action(minigame, t)
 	minigame:action(false, t)
 end
 
-local function _update_preview_autosolve(session, minigame, t, move_input)
+_update_preview_autosolve = function(session, minigame, t, move_input)
 	if _is_decode_autosolve_enabled() and minigame == (_active_decode_autosolve_minigame and _active_decode_autosolve_minigame() or nil) and decode_autosolve_cooldown <= 0 and _is_decode_on_target(minigame, t) then
 		local current_stage = minigame._current_stage
 		local targets = minigame._decode_targets or {}
@@ -4576,7 +5137,19 @@ local function _update_preview_autosolve(session, minigame, t, move_input)
 		_trigger_preview_primary_action(minigame, t)
 	end
 
+	if _is_expedition_autosolve_enabled() and minigame == (_active_expedition_autosolve_minigame and _active_expedition_autosolve_minigame() or nil) and expedition_autosolve_cooldown <= 0 and _is_expedition_on_target(minigame, t) then
+		local current_stage = minigame._current_stage
+		local targets = minigame._decode_targets or {}
+		local same_next_target = current_stage and targets[current_stage] ~= nil and targets[current_stage] == targets[current_stage + 1]
+
+		expedition_autosolve_cooldown = same_next_target and 0.05 or _expedition_autosolve_cooldown_seconds()
+		_trigger_preview_primary_action(minigame, t)
+	end
+
 	if _is_drill_autosolve_enabled() and minigame == (_active_drill_autosolve_minigame and _active_drill_autosolve_minigame() or nil) then
+		mod._sync_drill_autosolve_minigame(minigame)
+		mod._sync_drill_autosolve_stage(minigame)
+
 		local auto_move = _drill_autosolve_move_vector(minigame)
 
 		if auto_move then
@@ -4622,7 +5195,7 @@ local function _update_preview_autosolve(session, minigame, t, move_input)
 	return move_input
 end
 
-local function _update_preview_input()
+_update_preview_input = function()
 	local session = practice_session
 	local minigame = session and session.minigame
 
@@ -4669,7 +5242,62 @@ local function _update_preview_input()
 	end
 end
 
-local function _handle_preview_input(action_name, result)
+_update_live_autosolve_input = function(minigame, t)
+	if not minigame or practice_session then
+		return
+	end
+
+	if minigame.uses_joystick and minigame:uses_joystick() then
+		local move_input = nil
+
+		if _is_drill_autosolve_enabled() and _looks_like_drill_minigame(minigame) then
+			mod._sync_drill_autosolve_stage(minigame)
+			move_input = _drill_autosolve_move_vector(minigame)
+		elseif _is_frequency_autosolve_enabled() and _looks_like_frequency_minigame(minigame) then
+			move_input = _frequency_autosolve_move_vector(minigame)
+		elseif _is_balance_autosolve_enabled() and _looks_like_balance_minigame(minigame) then
+			move_input = _balance_autosolve_move_vector(minigame)
+		end
+
+		if move_input then
+			minigame:on_axis_set(t, move_input.x or 0, move_input.y or 0)
+		end
+	end
+
+	if _is_decode_autosolve_enabled() and _looks_like_decode_minigame(minigame) and decode_autosolve_cooldown <= 0 and decode_autosolve_press_deadline <= t and _is_decode_on_target(minigame, t) then
+		local current_stage = minigame._current_stage
+		local targets = minigame._decode_targets or {}
+		local same_next_target = current_stage and targets[current_stage] ~= nil and targets[current_stage] == targets[current_stage + 1]
+		local press_window = _decode_autosolve_press_window_seconds(minigame)
+
+		decode_autosolve_press_deadline = t + press_window
+		decode_autosolve_cooldown = press_window + (same_next_target and 0.05 or _decode_autosolve_cooldown_seconds())
+		_trigger_preview_primary_action(minigame, t)
+	end
+
+	if _is_expedition_autosolve_enabled() and _looks_like_expedition_minigame(minigame) and expedition_autosolve_cooldown <= 0 and expedition_autosolve_press_deadline <= t and _is_expedition_on_target(minigame, t) then
+		local current_stage = minigame._current_stage
+		local targets = minigame._decode_targets or {}
+		local same_next_target = current_stage and targets[current_stage] ~= nil and targets[current_stage] == targets[current_stage + 1]
+		local press_window = _expedition_autosolve_press_window_seconds(minigame)
+
+		expedition_autosolve_press_deadline = t + press_window
+		expedition_autosolve_cooldown = press_window + (same_next_target and 0.05 or _expedition_autosolve_cooldown_seconds())
+		_trigger_preview_primary_action(minigame, t)
+	end
+
+	if _is_drill_autosolve_enabled() and _looks_like_drill_minigame(minigame) and (mod._drill_autosolve_submit_cooldown or 0) <= 0 and _should_submit_drill_autosolve(minigame, t) then
+		mod._drill_autosolve_submit_cooldown = _drill_autosolve_step_delay()
+		_trigger_preview_primary_action(minigame, t)
+	end
+
+	if _is_frequency_autosolve_enabled() and _looks_like_frequency_minigame(minigame) and frequency_autosolve_submit_cooldown <= 0 and minigame.is_visually_on_target and minigame:is_visually_on_target() then
+		frequency_autosolve_submit_cooldown = 0.12
+		_trigger_preview_primary_action(minigame, t)
+	end
+end
+
+_handle_preview_input = function(action_name, result)
 	if not _should_block_overlay_practice_input() then
 		return result
 	end
@@ -4677,7 +5305,7 @@ local function _handle_preview_input(action_name, result)
 	return _blocked_preview_input_value(action_name, result)
 end
 
-local function _input_get_hook(func, self, action_name)
+_input_get_hook = function(func, self, action_name)
 	local result = func(self, action_name)
 
 	if preview_input_polling then
@@ -4708,7 +5336,9 @@ local function _input_get_hook(func, self, action_name)
 	result = _handle_preview_input(action_name, result)
 
 	if self and self.type == "Ingame" then
+		result = _handle_expedition_autosolve_input(action_name, result)
 		result = _handle_decode_autosolve_input(action_name, result)
+		result = _handle_drill_autosolve_input(action_name, result)
 		result = _handle_frequency_autosolve_input(action_name, result)
 		result = _handle_balance_autosolve_input(action_name, result)
 	end
@@ -4724,7 +5354,9 @@ mod:hook_require("scripts/extension_systems/input/player_unit_input_extension", 
 		local result = func(self, action)
 
 		if not _should_block_overlay_practice_input() then
+			result = _handle_expedition_autosolve_input(action, result)
 			result = _handle_decode_autosolve_input(action, result)
+			result = _handle_drill_autosolve_input(action, result)
 			result = _handle_frequency_autosolve_input(action, result)
 			result = _handle_balance_autosolve_input(action, result)
 
@@ -4740,6 +5372,7 @@ mod:hook_require("scripts/extension_systems/input/human_unit_input", function(Hu
 		local result = func(self, action)
 
 		if not _should_block_overlay_practice_input() then
+			result = _handle_expedition_autosolve_input(action, result)
 			result = _handle_decode_autosolve_input(action, result)
 			result = _handle_drill_autosolve_input(action, result)
 			result = _handle_frequency_autosolve_input(action, result)
@@ -4749,6 +5382,105 @@ mod:hook_require("scripts/extension_systems/input/human_unit_input", function(Hu
 		end
 
 		return _blocked_preview_input_value(action, result)
+	end)
+end)
+
+mod:hook_require("scripts/extension_systems/character_state_machine/character_states/player_character_state_minigame", function(PlayerCharacterStateMinigame)
+	mod:hook(PlayerCharacterStateMinigame, "_update_input", function(func, self, t, fixed_frame, input_extension)
+		if practice_session or not _is_drill_autosolve_enabled() then
+			return func(self, t, fixed_frame, input_extension)
+		end
+
+		local minigame = self and self._minigame
+
+		if not _looks_like_drill_minigame(minigame) then
+			mod._sync_drill_autosolve_minigame(nil)
+
+			return func(self, t, fixed_frame, input_extension)
+		end
+
+		mod._sync_drill_autosolve_minigame(minigame)
+		mod._sync_drill_autosolve_stage(minigame)
+
+		local action_one_hold = input_extension:get("action_one_hold")
+		local interact_hold = input_extension:get("interact_hold")
+		local jump_held = input_extension:get("jump_held")
+
+		if action_one_hold ~= self._previous_action_one_hold then
+			self._previous_action_one_hold = action_one_hold
+			self._previous_input = action_one_hold
+		elseif interact_hold ~= self._previous_interact_hold then
+			self._previous_interact_hold = interact_hold
+			self._previous_input = interact_hold
+		elseif jump_held ~= self._previous_jump_held then
+			self._previous_jump_held = jump_held
+			self._previous_input = jump_held
+		end
+
+		local primary_input = self._previous_input
+		local action_two_pressed = input_extension:get("action_two_pressed")
+		local cancel = action_two_pressed
+		local block_weapon_actions = false
+		local animation_extension = self._animation_extension
+		local auto_move = _drill_autosolve_move_vector(minigame)
+		local should_submit = (mod._drill_autosolve_submit_cooldown or 0) <= 0 and _should_submit_drill_autosolve(minigame, t)
+		local hold_submit = (mod._drill_autosolve_press_deadline or 0) > t or (mod._drill_autosolve_second_press_deadline or 0) > t and (mod._drill_autosolve_release_deadline or 0) <= t
+		local release_submit = (mod._drill_autosolve_release_deadline or 0) > t and (mod._drill_autosolve_press_deadline or 0) <= t
+
+		if not self:_is_wielding_minigame_device() then
+			return true
+		end
+
+		if hold_submit or should_submit then
+			primary_input = true
+		elseif release_submit then
+			primary_input = false
+		elseif mod._drill_autosolve_force_release then
+			primary_input = false
+		end
+
+		if minigame:uses_action() and minigame:action(primary_input, t) then
+			animation_extension:anim_event_1p("button_press")
+
+			if minigame:is_completed() then
+				animation_extension:anim_event_1p("scan_end")
+			end
+		end
+
+		if minigame:uses_joystick() then
+			local move_input = auto_move or input_extension:get("move") or Vector3.zero()
+
+			minigame:on_axis_set(t, move_input.x or 0, move_input.y or 0)
+
+			if not Vector3.equal(move_input, Vector3.zero()) then
+				if move_input.y > 0 or move_input.x > 0 then
+					animation_extension:anim_event_1p("knob_turn_up")
+				else
+					animation_extension:anim_event_1p("knob_turn_down")
+				end
+			end
+		end
+
+		cancel = minigame:escape_action(action_two_pressed)
+		block_weapon_actions = minigame:blocks_weapon_actions()
+
+		if should_submit then
+			mod._drill_autosolve_submit_cooldown = _drill_autosolve_step_delay()
+			mod._drill_autosolve_press_deadline = t + 0.08
+			mod._drill_autosolve_release_deadline = t + 0.12
+			mod._drill_autosolve_second_press_deadline = t + 0.2
+			mod._drill_autosolve_force_release = true
+		elseif mod._drill_autosolve_force_release then
+			mod._drill_autosolve_force_release = false
+		end
+
+		if not cancel and not block_weapon_actions then
+			local weapon_extension = self._weapon_extension
+
+			weapon_extension:update_weapon_actions(fixed_frame)
+		end
+
+		return cancel
 	end)
 end)
 
@@ -4822,6 +5554,13 @@ function mod.on_setting_changed(setting_id)
 	if setting_id == "enable_mod_override" then
 		_apply_mod_override_state()
 	elseif setting_id == "enable_world_scans" or setting_id == "world_scan_display_mode" or setting_id == "world_scan_always_show" or setting_id == "world_scan_through_walls" or setting_id == "world_scan_item_overlay" or setting_id == "world_scan_color_red" or setting_id == "world_scan_color_green" or setting_id == "world_scan_color_blue" or setting_id == "world_scan_color_alpha" then
+		if setting_id == "world_scan_color_red" or setting_id == "world_scan_color_green" or setting_id == "world_scan_color_blue" or setting_id == "world_scan_color_alpha" then
+			mod._world_scan_unit_color_signatures = {}
+			mod._world_scan_outline_settings_signature = nil
+		elseif setting_id == "world_scan_through_walls" then
+			mod._world_scan_outline_settings_signature = nil
+		end
+
 		_set_world_scan_highlights(false)
 
 		if setting_id == "world_scan_always_show" or setting_id == "world_scan_through_walls" or setting_id == "world_scan_item_overlay" then
@@ -4844,6 +5583,12 @@ function mod.on_setting_changed(setting_id)
 		end
 	elseif setting_id == "enable_decode_minigame" and not _is_decode_autosolve_enabled() then
 		_reset_decode_autosolve()
+	elseif setting_id == "enable_expedition_autosolve" or setting_id == "expedition_interact_cooldown" or setting_id == "expedition_target_precision" then
+		if not _is_expedition_autosolve_enabled() then
+			_reset_expedition_autosolve()
+		end
+	elseif setting_id == "enable_expedition_minigame" and not _is_expedition_autosolve_enabled() then
+		_reset_expedition_autosolve()
 	elseif setting_id == "enable_drill_autosolve" or setting_id == "drill_autosolve_speed" then
 		if not _is_drill_autosolve_enabled() then
 			_reset_drill_autosolve()
@@ -4882,6 +5627,21 @@ function mod.update(dt)
 	dt = dt or 0
 	local t = _gameplay_time()
 
+	mod._cached_local_player = nil
+	mod._cached_local_player_unit = nil
+	mod._cached_live_minigame = nil
+
+	if mod._last_gameplay_time and t + 1 < mod._last_gameplay_time then
+		_reset_decode_autosolve()
+		_reset_expedition_autosolve()
+		_reset_drill_autosolve()
+		_reset_frequency_autosolve()
+		_reset_balance_autosolve()
+		_set_preview_input_simulation(false)
+	end
+
+	mod._last_gameplay_time = t
+
 	if mod._preview_gameplay_timer_missing then
 		mod._preview_gameplay_timer_missing = nil
 		preview_reopen_requested = false
@@ -4898,6 +5658,10 @@ function mod.update(dt)
 		decode_autosolve_cooldown = math.max(decode_autosolve_cooldown - dt, 0)
 	end
 
+	if expedition_autosolve_cooldown > 0 then
+		expedition_autosolve_cooldown = math.max(expedition_autosolve_cooldown - dt, 0)
+	end
+
 	if frequency_autosolve_submit_cooldown > 0 then
 		frequency_autosolve_submit_cooldown = math.max(frequency_autosolve_submit_cooldown - dt, 0)
 	end
@@ -4908,6 +5672,10 @@ function mod.update(dt)
 
 	if (mod._drill_autosolve_move_cooldown or 0) > 0 then
 		mod._drill_autosolve_move_cooldown = math.max(mod._drill_autosolve_move_cooldown - dt, 0)
+	end
+
+	if _is_drill_autosolve_enabled() then
+		mod._sync_drill_autosolve_minigame(_active_drill_autosolve_minigame and _active_drill_autosolve_minigame() or nil)
 	end
 
 	if balance_input_window > 0 then
@@ -4933,7 +5701,7 @@ function mod.update(dt)
 		_apply_scanner_current_alpha()
 	end
 
-	if scanner_world_helper_active then
+	if scanner_world_helper_active or scanner_equipped_active or scanner_searching_active then
 		local search_input_active = _scanner_search_input_active()
 
 		if search_input_active ~= scanner_searching_active then
@@ -4948,12 +5716,9 @@ function mod.update(dt)
 
 	_update_preview_input()
 
-	local live_drill_minigame = not practice_session and (_active_live_minigame and _active_live_minigame() or nil)
+	local live_minigame = _active_live_minigame and _active_live_minigame() or nil
 
-	if _is_drill_autosolve_enabled() and _looks_like_drill_minigame(live_drill_minigame) and (mod._drill_autosolve_submit_cooldown or 0) <= 0 and _should_submit_drill_autosolve(live_drill_minigame, t) then
-		mod._drill_autosolve_submit_cooldown = _drill_autosolve_step_delay()
-		_trigger_preview_primary_action(live_drill_minigame, t)
-	end
+	_update_live_autosolve_input(live_minigame, t)
 
 	if _world_scan_effective_active() and t >= (mod._world_scan_next_refresh_t or 0) then
 		mod._world_scan_next_refresh_t = t + 0.5
@@ -4962,7 +5727,7 @@ function mod.update(dt)
 
 	if _world_scan_effective_active() and _world_scan_needs_visibility_refresh() and t >= (mod._world_scan_next_visibility_refresh_t or 0) then
 		mod._world_scan_next_visibility_refresh_t = t + 0.15
-		_set_world_scan_highlights(true)
+		_set_world_scan_highlights(true, false)
 	end
 
 	if scanner_searching_active or scanner_overlay_active then
@@ -5069,9 +5834,11 @@ end
 
 local function _shutdown_runtime_state_for_unload()
 	_reset_decode_autosolve()
+	_reset_expedition_autosolve()
 	_reset_drill_autosolve()
 	_reset_frequency_autosolve()
 	_reset_balance_autosolve()
+	mod._cached_live_minigame_type = nil
 	_clear_preview_close_request()
 	preview_reopen_requested = false
 	_set_preview_input_simulation(false)

@@ -1,6 +1,6 @@
 --[[
 	File: AuspexHelper_data.lua
-	Description: DMF settings for Aspex Helper.
+	Description: DMF settings for Auspex Helper.
 	Overall Release Version: 1.0.0
 	File Version: 1.0.0
 	File Introduced in: 1.0.0
@@ -276,7 +276,7 @@ return {
 						setting_id = "overlay_color_green",
 						type = "numeric",
 						default_value = 255,
-						range = { 0, 225 },
+						range = { 0, 255 },
 						decimals_number = 0,
 						title = "overlay_color_green",
 						tooltip = "overlay_color_green_desc",
@@ -285,7 +285,7 @@ return {
 						setting_id = "overlay_color_blue",
 						type = "numeric",
 						default_value = 110,
-						range = { 0, 225 },
+						range = { 0, 255 },
 						decimals_number = 0,
 						title = "overlay_color_blue",
 						tooltip = "overlay_color_blue_desc",
@@ -417,7 +417,7 @@ return {
 					{
 						setting_id = "decode_interact_cooldown",
 						type = "numeric",
-						default_value = 150,
+						default_value = 80,
 						range = { 20, 300 },
 						decimals_number = 0,
 						title = "decode_interact_cooldown",
@@ -426,7 +426,7 @@ return {
 					{
 						setting_id = "decode_target_precision",
 						type = "numeric",
-						default_value = 4,
+						default_value = 3,
 						range = { 1, 4 },
 						decimals_number = 0,
 						title = "decode_target_precision",
@@ -444,6 +444,46 @@ return {
 							{ text = "future_rows_2", value = 2 },
 							{ text = "future_rows_3", value = 3 },
 						},
+					},
+				},
+			},
+			{
+				setting_id = "expedition_group",
+				type = "group",
+				title = "expedition_group",
+				tooltip = "expedition_group_desc",
+				sub_widgets = {
+					{
+						setting_id = "enable_expedition_helper",
+						type = "checkbox",
+						default_value = true,
+						title = "enable_expedition_helper",
+						tooltip = "enable_expedition_helper_desc",
+					},
+					{
+						setting_id = "enable_expedition_autosolve",
+						type = "checkbox",
+						default_value = false,
+						title = "enable_expedition_autosolve",
+						tooltip = "enable_expedition_autosolve_desc",
+					},
+					{
+						setting_id = "expedition_interact_cooldown",
+						type = "numeric",
+						default_value = 150,
+						range = { 20, 300 },
+						decimals_number = 0,
+						title = "expedition_interact_cooldown",
+						tooltip = "expedition_interact_cooldown_desc",
+					},
+					{
+						setting_id = "expedition_target_precision",
+						type = "numeric",
+						default_value = 4,
+						range = { 1, 4 },
+						decimals_number = 0,
+						title = "expedition_target_precision",
+						tooltip = "expedition_target_precision_desc",
 					},
 				},
 			},
@@ -499,6 +539,13 @@ return {
 				title = "frequency_group",
 				tooltip = "frequency_group_desc",
 				sub_widgets = {
+					{
+						setting_id = "enable_frequency_direction_arrows",
+						type = "checkbox",
+						default_value = true,
+						title = "enable_frequency_direction_arrows",
+						tooltip = "enable_frequency_direction_arrows_desc",
+					},
 					{
 						setting_id = "enable_frequency_autosolve",
 						type = "checkbox",

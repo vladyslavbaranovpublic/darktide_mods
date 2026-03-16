@@ -1,6 +1,6 @@
 --[[
 	File: auspex_practice_view.lua
-	Description: Centered overlay scanner view for Aspex Helper minigames.
+	Description: Centered overlay scanner view for Auspex Helper minigames.
 	Overall Release Version: 1.0.0
 	File Version: 1.0.0
 	File Introduced in: 1.0.0
@@ -40,7 +40,7 @@ local OVERLAY_OUTLINE_SIZE = {
 	1096,
 	1096,
 }
-local OVERLAY_FREQUENCY_SIDE_PADDING = 110
+local OVERLAY_FREQUENCY_SIDE_PADDING = 35
 local OVERLAY_FREQUENCY_WIDGET_SIZE = {}
 local RENDER_SIZE = 1024
 local BALANCE_PROGRESS_TEXTURE = "content/ui/materials/backgrounds/scanner/scanner_balance_progress"
@@ -388,6 +388,15 @@ local function _world_scan_overlay_context()
 	return player_unit, first_person, physics_world, mission_objective_zone_system
 end
 
+local function _cached_world_scan_highlight_unit(self, physics_world, first_person, scan_settings, t)
+	if t >= (self._world_scan_next_highlight_refresh_t or 0) then
+		self._world_scan_highlight_unit = physics_world and Scanning.find_scannable_unit(physics_world, first_person, scan_settings) or nil
+		self._world_scan_next_highlight_refresh_t = t + 0.05
+	end
+
+	return self._world_scan_highlight_unit
+end
+
 local function _draw_world_scan_overlay(self, t, ui_renderer)
 	local widgets = _ensure_world_scan_widgets(self)
 	local _, first_person, physics_world, mission_objective_zone_system = _world_scan_overlay_context()
@@ -415,15 +424,41 @@ local function _draw_world_scan_overlay(self, t, ui_renderer)
 	flat_forward = Vector3.normalize(flat_forward)
 	flat_right = Vector3.normalize(flat_right)
 
-	local color = _world_scan_overlay_color(180)
-	local target_color = _world_scan_overlay_target_color(255)
+	self._world_scan_overlay_color = self._world_scan_overlay_color or {
+		0,
+		0,
+		0,
+		0,
+	}
+	self._world_scan_overlay_target_color = self._world_scan_overlay_target_color or {
+		0,
+		0,
+		0,
+		0,
+	}
+	self._world_scan_overlay_guide_color = self._world_scan_overlay_guide_color or {
+		0,
+		0,
+		0,
+		0,
+	}
+	self._world_scan_overlay_ring_color = self._world_scan_overlay_ring_color or {
+		0,
+		0,
+		0,
+		0,
+	}
 	local ring_pulse = 0.92 + math.sin(t * 2.5) * 0.06
-	local highlight_unit = physics_world and Scanning.find_scannable_unit(physics_world, first_person, scan_settings) or nil
+	local highlight_unit = _cached_world_scan_highlight_unit(self, physics_world, first_person, scan_settings, t)
+
+	_fill_overlay_color(self._world_scan_overlay_color, 180)
+	_fill_world_scan_target_color(self._world_scan_overlay_target_color, 255)
+	_fill_overlay_color(self._world_scan_overlay_guide_color, 64)
 
 	for i = 1, #widgets.guides do
 		local widget = widgets.guides[i]
 
-		widget.style.line.color = _world_scan_overlay_color(64)
+		widget.style.line.color = self._world_scan_overlay_guide_color
 		UIWidget.draw(widget, ui_renderer)
 	end
 
@@ -432,13 +467,15 @@ local function _draw_world_scan_overlay(self, t, ui_renderer)
 
 		widget.offset[1] = 0
 		widget.offset[2] = 0
-		widget.style.icon.color = _world_scan_overlay_color(math.floor((34 + i * 10) * ring_pulse))
+		_fill_overlay_color(self._world_scan_overlay_ring_color, math.floor((34 + i * 10) * ring_pulse))
+		widget.style.icon.color = self._world_scan_overlay_ring_color
 		UIWidget.draw(widget, ui_renderer)
 	end
 
 	widgets.player.offset[1] = 0
 	widgets.player.offset[2] = 0
-	widgets.player.style.icon.color = _world_scan_overlay_color(255)
+	_fill_overlay_color(self._world_scan_overlay_ring_color, 255)
+	widgets.player.style.icon.color = self._world_scan_overlay_ring_color
 	UIWidget.draw(widgets.player, ui_renderer)
 
 	local scannable_units = mod._world_scan_scannable_units or mod._world_scan_icon_units or mission_objective_zone_system:scannable_units()
@@ -480,7 +517,7 @@ local function _draw_world_scan_overlay(self, t, ui_renderer)
 				widget.style.icon.size[2] = icon_size
 				widget.offset[1] = offset_x
 				widget.offset[2] = offset_y
-				widget.style.icon.color = is_highlight and target_color or color
+				widget.style.icon.color = is_highlight and self._world_scan_overlay_target_color or self._world_scan_overlay_color
 
 				UIWidget.draw(widget, ui_renderer)
 			end
@@ -507,9 +544,23 @@ local function _draw_world_scan_screen_icons(self, ui_renderer)
 	local screen_offset = UIScenegraph.world_position(self._ui_scenegraph, "screen", 1)
 	local screen_x, screen_y = Vector3.to_elements(screen_offset)
 	local inverse_scale = ui_renderer.inverse_scale or 1
-	local highlight_unit = physics_world and Scanning.find_scannable_unit(physics_world, first_person, _scanner_scan_settings()) or nil
-	local base_color = _world_scan_icon_color(255)
-	local highlight_color = _world_scan_icon_color(255)
+	local highlight_unit = _cached_world_scan_highlight_unit(self, physics_world, first_person, _scanner_scan_settings(), self:get_time())
+
+	self._world_scan_icon_color = self._world_scan_icon_color or {
+		0,
+		0,
+		0,
+		0,
+	}
+	self._world_scan_icon_highlight_color = self._world_scan_icon_highlight_color or {
+		0,
+		0,
+		0,
+		0,
+	}
+
+	_fill_world_scan_icon_color(self._world_scan_icon_color, 255)
+	_fill_world_scan_icon_color(self._world_scan_icon_highlight_color, 255)
 	local drawn = 0
 
 	for scannable_unit, _ in pairs(icon_units) do
@@ -536,7 +587,7 @@ local function _draw_world_scan_screen_icons(self, ui_renderer)
 				style.offset[2] = -size * 0.5
 				style.size[1] = size
 				style.size[2] = size
-				style.color = is_highlight and highlight_color or base_color
+				style.color = is_highlight and self._world_scan_icon_highlight_color or self._world_scan_icon_color
 
 				UIWidget.draw(widget, ui_renderer)
 
@@ -557,6 +608,30 @@ local function _set_color(color, a, r, g, b)
 	color[4] = b
 
 	return color
+end
+
+_fill_overlay_color = function(color, alpha)
+	local base_alpha = math.clamp(mod:get("overlay_color_alpha") or 255, 0, 255)
+	local requested_alpha = math.clamp(alpha or 255, 0, 255)
+	local final_alpha = math.floor(requested_alpha * (base_alpha / 255))
+
+	return _set_color(color, final_alpha, mod:get("overlay_color_red") or 0, mod:get("overlay_color_green") or 255, mod:get("overlay_color_blue") or 110)
+end
+
+_fill_world_scan_icon_color = function(color, alpha)
+	local base_alpha = math.clamp(mod:get("world_scan_color_alpha") or 255, 0, 255)
+	local requested_alpha = math.clamp(alpha or 255, 0, 255)
+	local final_alpha = math.floor(requested_alpha * (base_alpha / 255))
+
+	return _set_color(color, final_alpha, mod:get("world_scan_color_red") or 0, mod:get("world_scan_color_green") or 255, mod:get("world_scan_color_blue") or 110)
+end
+
+_fill_world_scan_target_color = function(color, alpha)
+	local base_alpha = math.clamp(mod:get("overlay_color_alpha") or 255, 0, 255)
+	local requested_alpha = math.clamp(alpha or 255, 0, 255)
+	local final_alpha = math.floor(requested_alpha * (base_alpha / 255))
+
+	return _set_color(color, final_alpha, 255, 170, 50)
 end
 
 local function _overlay_scale()
@@ -724,11 +799,11 @@ local function _decode_frame_widget_definition()
 			value = "content/ui/materials/backgrounds/scanner/scanner_decode_symbol_frame",
 			style = {
 				hdr = true,
-				color = {
-					255,
-					255,
-					165,
+				color = _drill_highlight_color(),
+				offset = {
 					0,
+					0,
+					-1,
 				},
 			},
 		},
@@ -743,12 +818,7 @@ local function _decode_highlight_widget_definition()
 			value = "content/ui/materials/backgrounds/scanner/scanner_decode_symbol_highlight",
 			style = {
 				hdr = true,
-				color = {
-					255,
-					255,
-					165,
-					0,
-				},
+				color = _drill_highlight_color(),
 			},
 		},
 	}, "center_pivot", nil, ScannerDisplayViewDecodeSymbolsSettings.decode_symbol_widget_size)
@@ -799,7 +869,10 @@ AuspexOverlayView.MINIGAMES = {
 }
 
 local STOCK_DRAW_DRILL_WIDGETS = MinigameDrillView.draw_widgets
-local STOCK_DRAW_FREQUENCY = MinigameFrequencyView._draw_frequency
+local STOCK_DRAW_FREQUENCY_WIDGETS = MinigameFrequencyView._auspex_helper_stock_draw_widgets or MinigameFrequencyView.draw_widgets
+MinigameFrequencyView._auspex_helper_stock_draw_widgets = STOCK_DRAW_FREQUENCY_WIDGETS
+local STOCK_DRAW_FREQUENCY = MinigameFrequencyView._auspex_helper_stock_draw_frequency or MinigameFrequencyView._draw_frequency
+MinigameFrequencyView._auspex_helper_stock_draw_frequency = STOCK_DRAW_FREQUENCY
 local STOCK_UPDATE_BALANCE_WIDGETS = MinigameBalanceView.update
 local STOCK_DRAW_BALANCE_WIDGETS = MinigameBalanceView.draw_widgets
 
@@ -815,6 +888,180 @@ local function _scanner_view_time()
 	end
 
 	return 0
+end
+
+local FREQUENCY_DIRECTION_ARROW_MATERIAL = "content/ui/materials/buttons/arrow_01"
+local FREQUENCY_DIRECTION_ARROW_SIZE = {
+	120,
+	120,
+}
+local FREQUENCY_DIRECTION_ARROW_TOP_Y = 205
+local FREQUENCY_DIRECTION_ARROW_DEPTH = 7
+local FREQUENCY_DIRECTION_ARROW_COLOR = {
+	255,
+	255,
+	165,
+	0,
+}
+local FREQUENCY_DIRECTION_ARROW_HIDDEN_COLOR = {
+	0,
+	255,
+	165,
+	0,
+}
+local FREQUENCY_DIRECTION_WIDGET_SPECS = {
+	x = {
+		offset = { -385, FREQUENCY_DIRECTION_ARROW_TOP_Y, FREQUENCY_DIRECTION_ARROW_DEPTH },
+	},
+	y = {
+		offset = { -240, FREQUENCY_DIRECTION_ARROW_TOP_Y, FREQUENCY_DIRECTION_ARROW_DEPTH },
+	},
+}
+
+local function _should_show_frequency_direction_arrows()
+	return mod:get("enable_frequency_direction_arrows") ~= false
+end
+
+local function _ensure_frequency_direction_widgets(view)
+	local widgets = view._auspex_helper_frequency_direction_widgets
+
+	if widgets and widgets.x and widgets.y and not widgets.left and not widgets.right and not widgets.up and not widgets.down then
+		return widgets
+	end
+
+	widgets = {}
+
+	for axis, spec in pairs(FREQUENCY_DIRECTION_WIDGET_SPECS) do
+		local widget_definition = UIWidget.create_definition({
+			{
+				pass_type = "rotated_texture",
+				style_id = "arrow",
+				value = FREQUENCY_DIRECTION_ARROW_MATERIAL,
+				style = {
+					hdr = true,
+					angle = 0,
+					color = table.clone(FREQUENCY_DIRECTION_ARROW_HIDDEN_COLOR),
+					offset = {
+						spec.offset[1],
+						spec.offset[2],
+						spec.offset[3],
+					},
+					pivot = {},
+				},
+			},
+		}, "center_pivot", nil, FREQUENCY_DIRECTION_ARROW_SIZE)
+
+		widgets[axis] = UIWidget.init("auspex_helper_frequency_arrow_" .. axis, widget_definition)
+	end
+
+	view._auspex_helper_frequency_direction_widgets = widgets
+
+	return widgets
+end
+
+local function _set_frequency_direction_widgets(view, minigame)
+	local widgets = _ensure_frequency_direction_widgets(view)
+	local active = _should_show_frequency_direction_arrows()
+		and minigame
+		and minigame.frequency
+		and minigame.target_frequency
+		and minigame.current_stage
+		and minigame:current_stage()
+		and not minigame:is_completed()
+	local x_angle = 0
+	local y_angle = 0
+	local x_active = false
+	local y_active = false
+
+	if active then
+		local current = minigame:frequency()
+		local target = minigame:target_frequency()
+		local margin = (MinigameSettings.frequency_success_margin or 0.1) * 0.35
+		local delta_x = target.x - current.x
+		local delta_y = target.y - current.y
+
+		if delta_x > margin then
+			x_active = true
+			x_angle = 0
+		elseif delta_x < -margin then
+			x_active = true
+			x_angle = math.rad(180)
+		end
+
+		if delta_y < -margin then
+			y_active = true
+			y_angle = math.rad(-90)
+		elseif delta_y > margin then
+			y_active = true
+			y_angle = math.rad(90)
+		end
+	end
+
+	local x_widget = widgets.x
+
+	if x_widget then
+		x_widget.style.arrow.color = x_active and FREQUENCY_DIRECTION_ARROW_COLOR or FREQUENCY_DIRECTION_ARROW_HIDDEN_COLOR
+		x_widget.style.arrow.angle = x_angle
+	end
+
+	local y_widget = widgets.y
+
+	if y_widget then
+		y_widget.style.arrow.color = y_active and FREQUENCY_DIRECTION_ARROW_COLOR or FREQUENCY_DIRECTION_ARROW_HIDDEN_COLOR
+		y_widget.style.arrow.angle = y_angle
+	end
+end
+
+local function _draw_frequency_direction_widgets(self, ui_renderer)
+	local widgets = self._auspex_helper_frequency_direction_widgets
+
+	if not widgets or not widgets.x or not widgets.y then
+		return
+	end
+
+	local x_widget = widgets.x
+
+	if x_widget.style.arrow.color[1] > 0 then
+		UIWidget.draw(x_widget, ui_renderer)
+	end
+
+	local y_widget = widgets.y
+
+	if y_widget.style.arrow.color[1] > 0 then
+		UIWidget.draw(y_widget, ui_renderer)
+	end
+end
+
+local function _reset_frequency_direction_widgets(self)
+	if not self then
+		return
+	end
+
+	self._auspex_helper_frequency_direction_widgets = nil
+end
+
+local original_frequency_init = MinigameFrequencyView._auspex_helper_stock_init or MinigameFrequencyView.init
+MinigameFrequencyView._auspex_helper_stock_init = original_frequency_init
+
+MinigameFrequencyView.init = function(self, context)
+	original_frequency_init(self, context)
+	_reset_frequency_direction_widgets(self)
+end
+
+local original_frequency_destroy = MinigameFrequencyView._auspex_helper_stock_destroy or MinigameFrequencyView.destroy
+MinigameFrequencyView._auspex_helper_stock_destroy = original_frequency_destroy
+
+MinigameFrequencyView.destroy = function(self)
+	_reset_frequency_direction_widgets(self)
+
+	if original_frequency_destroy then
+		return original_frequency_destroy(self)
+	end
+end
+
+local function _sync_frequency_direction_widget_state(self, minigame)
+	_ensure_frequency_direction_widgets(self)
+	_set_frequency_direction_widgets(self, minigame)
 end
 
 local function _create_balance_progress_mask_widget(name, offset_x, offset_y, z, min_u, max_u, min_v, max_v, width, height)
@@ -1489,6 +1736,16 @@ MinigameFrequencyView._draw_frequency = function (self, frequency, color, t, ui_
 	end
 end
 
+MinigameFrequencyView.draw_widgets = function (self, dt, t, input_service, ui_renderer)
+	STOCK_DRAW_FREQUENCY_WIDGETS(self, dt, t, input_service, ui_renderer)
+
+	local minigame_extension = self._minigame_extension
+	local minigame = minigame_extension and minigame_extension:minigame(MinigameSettings.types.frequency) or nil
+
+	_sync_frequency_direction_widget_state(self, minigame)
+	_draw_frequency_direction_widgets(self, ui_renderer)
+end
+
 MinigameBalanceView.update = function (self, dt, t, widgets_by_name)
 	if self._auspex_helper_overlay_balance and widgets_by_name then
 		self._auspex_helper_balance_progress_widget = widgets_by_name.balance_progress
@@ -1610,36 +1867,48 @@ function AuspexOverlayView:_refresh_frame_style(force)
 	local widgets_by_name = self._widgets_by_name
 	local backdrop_alpha = _overlay_backdrop_alpha()
 	local show_decorations = _overlay_show_decorations()
+	local overlay_red = mod:get("overlay_color_red") or 0
+	local overlay_green = mod:get("overlay_color_green") or 255
+	local overlay_blue = mod:get("overlay_color_blue") or 110
+	local overlay_alpha = math.clamp(mod:get("overlay_color_alpha") or 255, 0, 255)
 	local backdrop_widget = widgets_by_name.overlay_backdrop
 	local outline_widget = widgets_by_name.overlay_outline
-	local frame_color = _overlay_color(128)
-	local outline_color = _overlay_color(70)
-	local decoration_color = show_decorations and _overlay_color(255) or self._hidden_color
-	local overlay_color_signature = string.format("%d:%d:%d:%d", mod:get("overlay_color_red") or 0, mod:get("overlay_color_green") or 255, mod:get("overlay_color_blue") or 110, mod:get("overlay_color_alpha") or 255)
 
-	if not force and backdrop_alpha == self._last_backdrop_alpha and show_decorations == self._last_show_decorations and overlay_color_signature == self._last_overlay_color_signature then
+	if not force
+		and backdrop_alpha == self._last_backdrop_alpha
+		and show_decorations == self._last_show_decorations
+		and overlay_red == self._last_overlay_color_red
+		and overlay_green == self._last_overlay_color_green
+		and overlay_blue == self._last_overlay_color_blue
+		and overlay_alpha == self._last_overlay_color_alpha then
 		return
 	end
 
 	self._last_backdrop_alpha = backdrop_alpha
 	self._last_show_decorations = show_decorations
-	self._last_overlay_color_signature = overlay_color_signature
+	self._last_overlay_color_red = overlay_red
+	self._last_overlay_color_green = overlay_green
+	self._last_overlay_color_blue = overlay_blue
+	self._last_overlay_color_alpha = overlay_alpha
 
 	_set_color(self._backdrop_color, backdrop_alpha, 0, 0, 0)
+	_set_color(self._frame_color, math.floor(128 * (overlay_alpha / 255)), overlay_red, overlay_green, overlay_blue)
+	_set_color(self._outline_color, math.floor(70 * (overlay_alpha / 255)), overlay_red, overlay_green, overlay_blue)
+	_set_color(self._decoration_color, overlay_alpha, overlay_red, overlay_green, overlay_blue)
 
 	if backdrop_widget and backdrop_widget.style and backdrop_widget.style.background then
 		backdrop_widget.style.background.color = self._backdrop_color
 	end
 
 	if outline_widget and outline_widget.style and outline_widget.style.frame then
-		outline_widget.style.frame.color = outline_color
+		outline_widget.style.frame.color = self._outline_color
 	end
 
 	for index = 1, #OVERLAY_FRAME_WIDGETS do
 		local widget = widgets_by_name[OVERLAY_FRAME_WIDGETS[index]]
 
 		if widget and widget.style and widget.style.frame then
-			widget.style.frame.color = frame_color
+			widget.style.frame.color = self._frame_color
 		end
 	end
 
@@ -1647,7 +1916,7 @@ function AuspexOverlayView:_refresh_frame_style(force)
 		local widget = widgets_by_name[OVERLAY_DECORATION_WIDGETS[index]]
 
 		if widget and widget.style and widget.style.highlight then
-			widget.style.highlight.color = decoration_color
+			widget.style.highlight.color = show_decorations and self._decoration_color or self._hidden_color
 		end
 	end
 end
